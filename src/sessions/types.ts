@@ -7,6 +7,7 @@ export interface Session {
   lastActiveAt: number;
   title?: string;
   isActive: boolean;
+  sessionNum: number;
 }
 
 export interface ChatSessionState {

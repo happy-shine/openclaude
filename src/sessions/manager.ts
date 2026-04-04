@@ -35,6 +35,7 @@ export class SessionManager {
       createdAt: Date.now(),
       lastActiveAt: Date.now(),
       isActive: true,
+      sessionNum: 1,
     };
     const state: ChatSessionState = {
       chatId,
@@ -53,6 +54,8 @@ export class SessionManager {
       s.isActive = false;
     }
 
+    const maxNum = Math.max(...state.sessions.map((s) => s.sessionNum ?? 0));
+
     const session: Session = {
       sessionId: randomUUID(),
       chatId,
@@ -60,6 +63,7 @@ export class SessionManager {
       createdAt: Date.now(),
       lastActiveAt: Date.now(),
       isActive: true,
+      sessionNum: maxNum + 1,
     };
 
     state.sessions.push(session);

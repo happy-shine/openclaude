@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import type { Logger } from "pino";
 import type { ClaudeProcess, StreamEvent } from "./types.js";
 import type { Session } from "../sessions/types.js";
@@ -9,6 +11,7 @@ export interface ProcessManagerConfig {
   maxProcesses: number;
   extraArgs: string[];
   workspaceDir: string;
+  botId: string;
 }
 
 export class ProcessManager {
@@ -32,11 +35,20 @@ export class ProcessManager {
       this.evictOldest();
     }
 
+    // Build per-session workspace: {workspaceDir}/{botId}/{chatId}_{sessionNum}
+    const safeChatId = session.chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const sessionDir = join(
+      this.config.workspaceDir,
+      this.config.botId,
+      `${safeChatId}_${session.sessionNum ?? 1}`,
+    );
+    mkdirSync(sessionDir, { recursive: true });
+
     const proc = spawnClaude({
       binary: this.config.binary,
       extraArgs: this.config.extraArgs,
       claudeSessionId: session.claudeSessionId,
-    }, this.config.workspaceDir);
+    }, sessionDir);
 
     const cp: ClaudeProcess = {
       sessionId: session.sessionId,

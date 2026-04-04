@@ -37,7 +37,9 @@ export class Gateway {
       extraArgs.push("--model", config.claude.model);
     }
 
-    // Ensure workspace directory exists
+    // Extract bot ID from token (part before the colon)
+    const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+
     const workspaceDir = join(this.dataDir, "workspace");
     mkdirSync(workspaceDir, { recursive: true });
 
@@ -48,6 +50,7 @@ export class Gateway {
         maxProcesses: config.claude.maxProcesses,
         extraArgs,
         workspaceDir,
+        botId,
       },
       log,
     );
@@ -145,10 +148,15 @@ export class Gateway {
 
     await this.telegram!.sendTyping(msg.chatId);
 
-    // Download attachments and build message for Claude
+    // Download attachments into the session's workspace
+    const botId = this.config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+    const safeChatId = msg.chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const sessionNum = session.sessionNum ?? 1;
+    const sessionWorkspace = join(this.dataDir, "workspace", botId, `${safeChatId}_${sessionNum}`);
+
     let messageText = msg.text;
     if (msg.attachments && msg.attachments.length > 0) {
-      const downloadsDir = join(this.dataDir, "workspace", "downloads");
+      const downloadsDir = join(sessionWorkspace, "downloads");
       for (const att of msg.attachments) {
         try {
           const localPath = await this.telegram!.downloadFile(

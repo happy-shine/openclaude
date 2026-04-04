@@ -56,6 +56,15 @@ describe("SessionManager", () => {
     expect(all[0].createdAt).toBeLessThanOrEqual(all[1].createdAt);
   });
 
+  it("assigns incrementing sessionNum", () => {
+    const s1 = mgr.resolve("chat1", "telegram");
+    expect(s1.sessionNum).toBe(1);
+    const s2 = mgr.createNew("chat1");
+    expect(s2.sessionNum).toBe(2);
+    const s3 = mgr.createNew("chat1");
+    expect(s3.sessionNum).toBe(3);
+  });
+
   it("updates session fields", () => {
     const s = mgr.resolve("chat1", "telegram");
     mgr.update(s.sessionId, { title: "My chat", claudeSessionId: "claude-123" });
