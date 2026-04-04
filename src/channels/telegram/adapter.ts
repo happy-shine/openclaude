@@ -28,9 +28,12 @@ export class TelegramAdapter implements ChannelAdapter {
   async start(): Promise<void> {
     registerHandlers(this.bot, this.messageHandler, this.commandHandlers, this.log);
     this.bot.start({
+      drop_pending_updates: true,
       onStart: (info) => {
         this.log.info({ username: info.username }, "Telegram bot started polling");
       },
+    }).catch((err) => {
+      this.log.error({ error: err instanceof Error ? err.message : String(err) }, "Telegram polling crashed");
     });
   }
 
