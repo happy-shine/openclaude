@@ -1,6 +1,6 @@
 import type { TelegramAdapter } from "./channels/telegram/adapter.js";
 
-const FLUSH_INTERVAL = 1500;
+const FLUSH_INTERVAL = 3000;
 
 // Ported from Claude Code: src/components/Spinner/utils.ts — getDefaultCharacters()
 // Grows then shrinks like a breathing pulse: · ✢ ✳ ✶ ✻ ✽ ✽ ✻ ✶ ✳ ✢ ·
