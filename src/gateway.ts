@@ -121,7 +121,14 @@ export class Gateway {
   private async handleMessage(msg: InboundMessage): Promise<void> {
     const access = this.checkMessageAccess(msg);
     if (!access.allowed) {
-      if (access.reason === "needs_pairing") await this.handlePairingChallenge(msg);
+      if (access.reason === "needs_pairing") {
+        await this.handlePairingChallenge(msg);
+      } else if (access.reason === "group_not_configured") {
+        await this.telegram!.send({
+          chatId: msg.chatId,
+          text: `This group is not configured.\n\nGroup chat ID: ${msg.chatId}\n\nAdd to config.yaml:\n  groups:\n    "${msg.chatId}":\n      enabled: true`,
+        });
+      }
       return;
     }
 
