@@ -14,7 +14,7 @@ export function parseStreamEvent(line: string): StreamEvent | null {
 }
 
 export function buildSpawnArgs(config: SpawnConfig): { cmd: string; args: string[] } {
-  const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
+  const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions"];
   if (config.claudeSessionId) {
     args.push("--resume", config.claudeSessionId);
   }
