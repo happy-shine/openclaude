@@ -129,7 +129,7 @@ export class ProgressTracker {
       await this.sendOrEdit(display);
       this.lastFlush = now;
       // Keep typing indicator alive during tool execution
-      if (this.buffer.length === 0) {
+      if (this.currentLabel) {
         await this.telegram.sendTyping(this.chatId).catch(() => {});
       }
     } finally {
@@ -162,8 +162,10 @@ export class ProgressTracker {
   }
 
   private buildDisplay(): string | null {
-    // Response text available — show it (replaces status)
-    if (this.buffer.length > 0) {
+    const hasActivity = this.currentLabel || this.completed.length > 0;
+
+    // No active tools and buffer has text — pure response mode
+    if (this.buffer.length > 0 && !this.currentLabel) {
       return this.buffer.slice(0, 4096);
     }
 
@@ -177,7 +179,7 @@ export class ProgressTracker {
     lines.push(`${glyph} ${this.verb}… (${totalElapsed})`);
 
     // Completed steps
-    for (const step of this.completed.slice(-8)) {
+    for (const step of this.completed.slice(-6)) {
       lines.push(step);
     }
 
@@ -187,7 +189,17 @@ export class ProgressTracker {
       lines.push(`  ↳ ${this.currentIcon} ${this.currentLabel} (${elapsed})`);
     }
 
-    return lines.join("\n");
+    // Show latest buffer text snippet below status (truncated)
+    if (this.buffer.length > 0) {
+      lines.push("");
+      const preview = this.buffer.length > 200
+        ? "…" + this.buffer.slice(-200)
+        : this.buffer;
+      lines.push(preview);
+    }
+
+    const display = lines.join("\n");
+    return display.slice(0, 4096) || null;
   }
 }
 
