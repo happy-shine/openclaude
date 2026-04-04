@@ -4,6 +4,8 @@ import type { ChannelAdapter, OutboundMessage, MessageHandler, CommandHandler } 
 import { createBot } from "./bot.js";
 import { registerHandlers } from "./handlers.js";
 import { splitMessage } from "./formatter.js";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 
 export class TelegramAdapter implements ChannelAdapter {
   readonly type = "telegram";
@@ -96,5 +98,25 @@ export class TelegramAdapter implements ChannelAdapter {
 
   async sendTyping(chatId: string): Promise<void> {
     await this.bot.api.sendChatAction(Number(chatId), "typing");
+  }
+
+  /** Download a Telegram file to local disk, return local path */
+  async downloadFile(fileId: string, destDir: string, fileName?: string): Promise<string> {
+    const file = await this.bot.api.getFile(fileId);
+    const filePath = file.file_path;
+    if (!filePath) throw new Error("Telegram returned no file_path");
+
+    const url = `https://api.telegram.org/file/bot${this.token}/${filePath}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Failed to download: ${resp.status}`);
+
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    const ext = filePath.includes(".") ? filePath.slice(filePath.lastIndexOf(".")) : "";
+    const localName = fileName ?? `${fileId.slice(0, 12)}${ext}`;
+    const localPath = join(destDir, localName);
+
+    mkdirSync(destDir, { recursive: true });
+    writeFileSync(localPath, buffer);
+    return localPath;
   }
 }

@@ -145,12 +145,37 @@ export class Gateway {
 
     await this.telegram!.sendTyping(msg.chatId);
 
+    // Download attachments and build message for Claude
+    let messageText = msg.text;
+    if (msg.attachments && msg.attachments.length > 0) {
+      const downloadsDir = join(this.dataDir, "workspace", "downloads");
+      for (const att of msg.attachments) {
+        try {
+          const localPath = await this.telegram!.downloadFile(
+            att.fileId,
+            downloadsDir,
+            att.fileName,
+          );
+          att.localPath = localPath;
+          this.log.info({ fileId: att.fileId, localPath }, "Downloaded attachment");
+
+          // Tell Claude about the file
+          const fileRef = `[Attached ${att.type}: ${localPath}]`;
+          messageText = messageText
+            ? `${messageText}\n\n${fileRef}`
+            : `Please read and process this file: ${localPath}`;
+        } catch (err) {
+          this.log.error({ error: err instanceof Error ? err.message : String(err) }, "Failed to download attachment");
+        }
+      }
+    }
+
     let sentMessageId: string | null = null;
     let buffer = "";
     let lastFlush = Date.now();
     const FLUSH_INTERVAL = 500;
 
-    for await (const event of this.processManager.sendMessage(session, msg.text)) {
+    for await (const event of this.processManager.sendMessage(session, messageText)) {
       if (event.type === "system" && event.subtype === "init" && event.session_id) {
         this.sessionManager.update(session.sessionId, {
           claudeSessionId: event.session_id as string,
