@@ -18,6 +18,7 @@ export interface ClaudeProcess {
   busy: boolean;
   lastActiveAt: number;
   idleTimer?: ReturnType<typeof setTimeout>;
+  workspaceDir: string;
 }
 
 export interface SpawnConfig {

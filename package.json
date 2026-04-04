@@ -1,7 +1,7 @@
 {
-  "name": "claude-gateway",
+  "name": "openclaude",
   "version": "0.1.0",
-  "description": "Gateway bridging chat platforms to Claude Code CLI",
+  "description": "Gateway bridging chat platforms (Telegram, Discord, etc.) to Claude Code CLI",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

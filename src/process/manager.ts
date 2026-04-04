@@ -1,10 +1,11 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Logger } from "pino";
 import type { ClaudeProcess, StreamEvent } from "./types.js";
 import type { Session } from "../sessions/types.js";
 import { spawnClaude, sendUserMessage, readUntilResult } from "./claude-cli.js";
 import { getTelegramFileSkill } from "../skills/telegram-file.js";
+import { getSoulEditorSkill } from "../skills/soul-editor.js";
 
 export interface ProcessManagerConfig {
   binary: string;
@@ -14,6 +15,7 @@ export interface ProcessManagerConfig {
   workspaceDir: string;
   botId: string;
   apiPort: number;
+  agentsDir: string;
 }
 
 export class ProcessManager {
@@ -37,20 +39,38 @@ export class ProcessManager {
       this.evictOldest();
     }
 
-    // Build per-session workspace: {workspaceDir}/{botId}/{chatId}_{sessionNum}
+    // Build per-session workspace: {workspaceDir}/{botId}/{chatId}_{sessionId}
+    // Uses the gateway's own sessionId (stable from creation, never changes).
+    // claudeSessionId mapping lives in sessions/state.json — no need to encode it in the path.
     const safeChatId = session.chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
     const sessionDir = join(
       this.config.workspaceDir,
       this.config.botId,
-      `${safeChatId}_${session.sessionNum ?? 1}`,
+      `${safeChatId}_${session.sessionId}`,
     );
     mkdirSync(sessionDir, { recursive: true });
 
-    // Inject the Telegram file skill via --append-system-prompt
-    const skill = getTelegramFileSkill(this.config.apiPort, session.chatId);
+    // Compose system prompt: SOUL.md + built-in skills
+    const parts: string[] = [];
+
+    // Load SOUL.md if it exists for this bot
+    const soulPath = join(this.config.agentsDir, this.config.botId, "SOUL.md");
+    if (existsSync(soulPath)) {
+      try {
+        const soul = readFileSync(soulPath, "utf-8").trim();
+        if (soul) parts.push(soul);
+      } catch {
+        this.log.warn({ soulPath }, "Failed to read SOUL.md");
+      }
+    }
+
+    // Built-in skills
+    parts.push(getTelegramFileSkill(this.config.apiPort, session.chatId));
+    parts.push(getSoulEditorSkill(this.config.apiPort, this.config.botId));
+
     const extraArgs = [
       ...this.config.extraArgs,
-      "--append-system-prompt", skill,
+      "--append-system-prompt", parts.join("\n\n---\n\n"),
     ];
 
     const proc = spawnClaude({
@@ -65,6 +85,7 @@ export class ProcessManager {
       process: proc,
       busy: false,
       lastActiveAt: Date.now(),
+      workspaceDir: sessionDir,
     };
 
     proc.on("exit", (code) => {
@@ -185,5 +206,9 @@ export class ProcessManager {
 
   getRunningCount(): number {
     return this.processes.size;
+  }
+
+  getWorkspaceDir(sessionId: string): string | undefined {
+    return this.processes.get(sessionId)?.workspaceDir;
   }
 }

@@ -1,4 +1,21 @@
 node_modules/
 dist/
 *.tgz
+
+# Runtime data
 .env
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config with secrets (example is tracked)
+config.yaml

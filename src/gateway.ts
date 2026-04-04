@@ -11,6 +11,7 @@ import { PairingManager } from "./auth/pairing.js";
 import { resolveDataDir } from "./config/loader.js";
 import { splitMessage } from "./channels/telegram/formatter.js";
 import { ApiServer } from "./api/server.js";
+import { ProgressTracker, getToolDetail } from "./progress.js";
 import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 
@@ -43,7 +44,9 @@ export class Gateway {
     const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
 
     const workspaceDir = join(this.dataDir, "workspace");
+    const agentsDir = join(this.dataDir, "agents");
     mkdirSync(workspaceDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
 
     this.processManager = new ProcessManager(
       {
@@ -54,6 +57,7 @@ export class Gateway {
         workspaceDir,
         botId,
         apiPort: config.gateway.port,
+        agentsDir,
       },
       log,
     );
@@ -161,100 +165,100 @@ export class Gateway {
 
     await this.telegram!.sendTyping(msg.chatId);
 
-    // Download attachments into the session's workspace
-    const botId = this.config.channels.telegram?.botToken?.split(":")[0] ?? "default";
-    const safeChatId = msg.chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const sessionNum = session.sessionNum ?? 1;
-    const sessionWorkspace = join(this.dataDir, "workspace", botId, `${safeChatId}_${sessionNum}`);
-
+    // Download attachments into the session's workspace.
+    // We need to pre-acquire to know the workspace dir, then download before sending the message.
     let messageText = msg.text;
     if (msg.attachments && msg.attachments.length > 0) {
-      const downloadsDir = join(sessionWorkspace, "downloads");
-      for (const att of msg.attachments) {
-        try {
-          const localPath = await this.telegram!.downloadFile(
-            att.fileId,
-            downloadsDir,
-            att.fileName,
-          );
-          att.localPath = localPath;
-          this.log.info({ fileId: att.fileId, localPath }, "Downloaded attachment");
+      // Trigger acquire to create the workspace dir
+      this.processManager.acquire(session);
+      const wsDir = this.processManager.getWorkspaceDir(session.sessionId);
+      if (wsDir) {
+        const downloadsDir = join(wsDir, "downloads");
+        for (const att of msg.attachments) {
+          try {
+            const localPath = await this.telegram!.downloadFile(
+              att.fileId,
+              downloadsDir,
+              att.fileName,
+            );
+            att.localPath = localPath;
+            this.log.info({ fileId: att.fileId, localPath }, "Downloaded attachment");
 
-          // Tell Claude about the file
-          const fileRef = `[Attached ${att.type}: ${localPath}]`;
-          messageText = messageText
-            ? `${messageText}\n\n${fileRef}`
-            : `Please read and process this file: ${localPath}`;
-        } catch (err) {
-          this.log.error({ error: err instanceof Error ? err.message : String(err) }, "Failed to download attachment");
+            const fileRef = `[Attached ${att.type}: ${localPath}]`;
+            messageText = messageText
+              ? `${messageText}\n\n${fileRef}`
+              : `Please read and process this file: ${localPath}`;
+          } catch (err) {
+            this.log.error({ error: err instanceof Error ? err.message : String(err) }, "Failed to download attachment");
+          }
         }
       }
     }
 
-    let sentMessageId: string | null = null;
-    let buffer = "";
-    let lastFlush = Date.now();
-    const FLUSH_INTERVAL = 500;
+    const progress = new ProgressTracker(this.telegram!, msg.chatId, msg.messageId);
+    progress.start(); // auto-flush every 1.5s for spinner animation
 
-    for await (const event of this.processManager.sendMessage(session, messageText)) {
-      if (event.type === "system" && event.subtype === "init" && event.session_id) {
-        this.sessionManager.update(session.sessionId, {
-          claudeSessionId: event.session_id as string,
-        });
-      }
+    try {
+      for await (const event of this.processManager.sendMessage(session, messageText)) {
+        // --- Session init ---
+        if (event.type === "system" && event.subtype === "init" && event.session_id) {
+          this.sessionManager.update(session.sessionId, {
+            claudeSessionId: event.session_id as string,
+          });
+        }
 
-      if (event.type === "assistant" && event.message) {
-        const content = event.message.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (typeof block === "object" && block !== null && "text" in block) {
-              buffer += (block as { text: string }).text;
+        // --- Real-time phase detection from raw API stream events ---
+        if (event.type === "stream_event" && event.event) {
+          const raw = event.event as Record<string, unknown>;
+          if (raw.type === "content_block_start") {
+            const block = raw.content_block as Record<string, unknown> | undefined;
+            if (block?.type === "thinking") {
+              progress.startThinking();
             }
           }
-        } else if (typeof content === "string") {
-          buffer += content;
         }
-      }
 
-      const now = Date.now();
-      if (buffer.length > 0 && now - lastFlush >= FLUSH_INTERVAL) {
-        if (!sentMessageId) {
-          sentMessageId = await this.telegram!.send({
-            chatId: msg.chatId,
-            text: buffer.slice(0, 4096),
-            replyToMessageId: msg.messageId,
-          });
-        } else {
-          await this.telegram!.editMessage(msg.chatId, sentMessageId, buffer.slice(0, 4096));
+        // --- Complete assistant message: extract tool_use + text ---
+        if (event.type === "assistant" && event.message) {
+          const content = event.message.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (typeof block !== "object" || block === null) continue;
+              const b = block as Record<string, unknown>;
+              if (b.type === "tool_use" && typeof b.name === "string") {
+                const detail = getToolDetail(b.name, b.input);
+                progress.startTool(b.name, detail);
+              }
+              if ("text" in b && typeof b.text === "string") {
+                progress.appendText(b.text);
+              }
+            }
+          } else if (typeof content === "string") {
+            progress.appendText(content);
+          }
         }
-        lastFlush = now;
-      }
 
-      if (event.type === "result") {
-        if (buffer.length > 0) {
-          if (!sentMessageId) {
-            await this.telegram!.send({
-              chatId: msg.chatId,
-              text: buffer,
-              replyToMessageId: msg.messageId,
-            });
-          } else {
-            await this.telegram!.editMessage(msg.chatId, sentMessageId, buffer.slice(0, 4096));
-            if (buffer.length > 4096) {
-              for (const chunk of splitMessage(buffer.slice(4096))) {
+        // --- Trigger flush on each event (debounced internally) ---
+        await progress.flush();
+
+        // --- Result: finalize ---
+        if (event.type === "result") {
+          const buf = progress.getBuffer();
+          if (buf.length > 0) {
+            await progress.sendOrEdit(buf);
+            if (buf.length > 4096) {
+              for (const chunk of splitMessage(buf.slice(4096))) {
                 await this.telegram!.send({ chatId: msg.chatId, text: chunk });
               }
             }
+          } else if (event.is_error) {
+            await progress.sendOrEdit(`Error: ${event.result ?? "Unknown error"}`);
           }
-        } else if (event.is_error) {
-          await this.telegram!.send({
-            chatId: msg.chatId,
-            text: `Error: ${event.result ?? "Unknown error"}`,
-            replyToMessageId: msg.messageId,
-          });
+          break;
         }
-        break;
       }
+    } finally {
+      progress.stop();
     }
 
     this.sessionManager.update(session.sessionId, { lastActiveAt: Date.now() });

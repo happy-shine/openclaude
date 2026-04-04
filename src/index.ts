@@ -458,6 +458,81 @@ allow
     console.log(`Removed ${id} from ${channel} allowlist.`);
   });
 
+// --- agent ---
+const agent = program.command("agent").description("Manage agent personality (SOUL.md)");
+
+agent
+  .command("show")
+  .description("Show current SOUL.md for the bot")
+  .option("-c, --config <path>", "Path to config file")
+  .action((opts: { config?: string }) => {
+    const dataDir = getDataDir(opts.config);
+    const config = loadConfig(opts.config);
+    const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+    const soulPath = join(dataDir, "agents", botId, "SOUL.md");
+    if (!existsSync(soulPath)) {
+      console.log(`No SOUL.md found for bot ${botId}.`);
+      console.log(`Create one with: claude-gateway agent edit`);
+      return;
+    }
+    console.log(`SOUL.md for bot ${botId} (${soulPath}):\n`);
+    console.log(readFileSync(soulPath, "utf-8"));
+  });
+
+agent
+  .command("edit")
+  .description("Edit SOUL.md in your default editor")
+  .option("-c, --config <path>", "Path to config file")
+  .action((opts: { config?: string }) => {
+    const dataDir = getDataDir(opts.config);
+    const config = loadConfig(opts.config);
+    const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+    const agentDir = join(dataDir, "agents", botId);
+    mkdirSync(agentDir, { recursive: true });
+    const soulPath = join(agentDir, "SOUL.md");
+
+    if (!existsSync(soulPath)) {
+      writeFileSync(soulPath, "# Soul\n\nDescribe your bot's personality here.\n");
+    }
+
+    const editor = process.env.EDITOR || process.env.VISUAL || "vi";
+    const child = spawn(editor, [soulPath], { stdio: "inherit" });
+    child.on("exit", (code) => {
+      if (code === 0) {
+        console.log(`SOUL.md saved. Restart the gateway to apply changes.`);
+      }
+      process.exit(code ?? 0);
+    });
+  });
+
+agent
+  .command("reset")
+  .description("Delete SOUL.md (reset to default behavior)")
+  .option("-c, --config <path>", "Path to config file")
+  .action((opts: { config?: string }) => {
+    const dataDir = getDataDir(opts.config);
+    const config = loadConfig(opts.config);
+    const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+    const soulPath = join(dataDir, "agents", botId, "SOUL.md");
+    if (!existsSync(soulPath)) {
+      console.log("No SOUL.md to remove.");
+      return;
+    }
+    unlinkSync(soulPath);
+    console.log(`SOUL.md removed for bot ${botId}. Restart the gateway to apply.`);
+  });
+
+agent
+  .command("path")
+  .description("Print the SOUL.md file path")
+  .option("-c, --config <path>", "Path to config file")
+  .action((opts: { config?: string }) => {
+    const dataDir = getDataDir(opts.config);
+    const config = loadConfig(opts.config);
+    const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+    console.log(join(dataDir, "agents", botId, "SOUL.md"));
+  });
+
 function formatAge(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s ago`;

@@ -1,7 +1,6 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
-import { createWriteStream, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
-import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { TelegramAdapter } from "../channels/telegram/adapter.js";
 
@@ -46,6 +45,8 @@ export class ApiServer {
         await this.handleSendFile(req, res, url);
       } else if (req.method === "POST" && url.pathname === "/api/send-message") {
         await this.handleSendMessage(req, res, url);
+      } else if (url.pathname === "/api/soul") {
+        await this.handleSoul(req, res, url);
       } else if (req.method === "GET" && url.pathname === "/api/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ status: "ok" }));
@@ -116,6 +117,64 @@ export class ApiServer {
     await this.config.telegram.send({ chatId, text });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
+  }
+
+  /**
+   * GET    /api/soul?bot_id=xxx  — read SOUL.md
+   * PUT    /api/soul?bot_id=xxx  — write SOUL.md (JSON body: {content: "..."})
+   * DELETE /api/soul?bot_id=xxx  — delete SOUL.md
+   */
+  private async handleSoul(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const botId = url.searchParams.get("bot_id");
+    if (!botId) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing bot_id" }));
+      return;
+    }
+
+    const agentsDir = join(this.config.dataDir, "agents");
+    const soulPath = join(agentsDir, botId, "SOUL.md");
+
+    if (req.method === "GET") {
+      let content: string | null = null;
+      if (existsSync(soulPath)) {
+        content = readFileSync(soulPath, "utf-8");
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, content }));
+      return;
+    }
+
+    if (req.method === "PUT") {
+      const body = await readBody(req);
+      let content: string;
+      try {
+        content = JSON.parse(body).content;
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON body, expected {content: string}" }));
+        return;
+      }
+      mkdirSync(join(agentsDir, botId), { recursive: true });
+      writeFileSync(soulPath, content, "utf-8");
+      this.log.info({ botId, soulPath }, "SOUL.md updated");
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    if (req.method === "DELETE") {
+      if (existsSync(soulPath)) {
+        unlinkSync(soulPath);
+        this.log.info({ botId }, "SOUL.md deleted");
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
   }
 }
 
