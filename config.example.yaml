@@ -1,0 +1,25 @@
+# Claude Gateway Configuration
+# Copy to ~/.claude-gateway/config.yaml and edit
+
+gateway:
+  port: 18790
+  dataDir: "~/.claude-gateway"
+  logLevel: "info"
+  logFormat: "pretty"
+
+claude:
+  binary: "claude"
+  idleTimeoutMs: 600000    # 10 minutes idle timeout for subprocesses
+  maxProcesses: 10
+  extraArgs: []
+
+auth:
+  defaultPolicy: "pairing"  # open | pairing | allowlist | disabled
+
+channels:
+  telegram:
+    botToken: "${TELEGRAM_BOT_TOKEN}"
+    dmPolicy: "pairing"
+    groupPolicy: "disabled"
+    allowFrom: []            # Pre-approved Telegram user IDs
+    groups: {}
