@@ -83,6 +83,7 @@ program
       if (opts.verbose) args.push("--verbose");
 
       const out = createWriteStream(logFile, { flags: "a" });
+      await new Promise<void>((r) => out.on("open", r));
       const child = spawn(process.argv[0], args, {
         detached: true,
         stdio: ["ignore", out, out],
@@ -240,6 +241,7 @@ program
     if (opts.verbose) args.push("--verbose");
 
     const out = createWriteStream(logFile, { flags: "a" });
+    await new Promise<void>((r) => out.on("open", r));
     const child = spawn(process.argv[0], args, {
       detached: true,
       stdio: ["ignore", out, out],
