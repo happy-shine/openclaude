@@ -3,7 +3,7 @@
 
 gateway:
   port: 18790
-  dataDir: "~/.claude-gateway"
+  dataDir: "~/.openclaude"
   logLevel: "info"
   logFormat: "pretty"
 

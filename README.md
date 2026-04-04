@@ -40,11 +40,11 @@ npm link        # makes `openclaude` available globally
 **1. Create config**
 
 ```bash
-mkdir -p ~/.claude-gateway
-cp config.example.yaml ~/.claude-gateway/config.yaml
+mkdir -p ~/.openclaude
+cp config.example.yaml ~/.openclaude/config.yaml
 ```
 
-Edit `~/.claude-gateway/config.yaml` and set your bot token:
+Edit `~/.openclaude/config.yaml` and set your bot token:
 
 ```yaml
 channels:
@@ -79,7 +79,7 @@ Full config example (`config.example.yaml`):
 ```yaml
 gateway:
   port: 18790                 # local API port (for file sending)
-  dataDir: "~/.claude-gateway"
+  dataDir: "~/.openclaude"
   logLevel: "info"            # debug | info | warn | error
 
 claude:
@@ -171,10 +171,10 @@ Changes take effect on the next `/new` session.
                      └──────────────────┘     └─────────────────┘
 ```
 
-**Data directory** (`~/.claude-gateway/`):
+**Data directory** (`~/.openclaude/`):
 
 ```
-~/.claude-gateway/
+~/.openclaude/
 ├── config.yaml              # configuration
 ├── logs/gateway.log         # daemon logs
 ├── sessions/                # session state per chat

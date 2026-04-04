@@ -15,7 +15,7 @@ const telegramChannelSchema = z.object({
 
 const gatewaySchema = z.object({
   port: z.number().int().positive().default(18790),
-  dataDir: z.string().default("~/.claude-gateway"),
+  dataDir: z.string().default("~/.openclaude"),
   logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
   logFormat: z.enum(["pretty", "json"]).default("pretty"),
 });
