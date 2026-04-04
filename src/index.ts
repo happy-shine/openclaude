@@ -258,13 +258,15 @@ gateway
         }, 500);
       });
       console.log("Gateway stopped.");
+      // Wait a bit for port to be released
+      await new Promise((r) => setTimeout(r, 1000));
     }
 
     // Start again in background
     const logDir = getLogDir(dataDir);
     const logFile = join(logDir, "gateway.log");
 
-    const args = [process.argv[1], "start", "--foreground"];
+    const args = [process.argv[1], "gateway", "start", "--foreground"];
     if (opts.config) args.push("--config", opts.config);
     if (opts.verbose) args.push("--verbose");
 
