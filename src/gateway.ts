@@ -97,6 +97,9 @@ export class Gateway {
   }
 
   private checkMessageAccess(msg: InboundMessage) {
+    // Reload allowFrom from disk on every check so CLI-side approvals
+    // are picked up by the running Gateway without a restart.
+    this.allowFrom = this.loadAllowFrom();
     const tgConfig = this.config.channels.telegram!;
     return checkAccess({
       senderId: msg.senderId,
