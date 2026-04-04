@@ -56,6 +56,27 @@ function getRunningPid(dataDir: string): number | null {
   }
 }
 
+// Clawd mascot poses — ported from Claude Code src/components/LogoV2/Clawd.tsx
+const CLAWD_POSES = [
+  // default
+  [" ▐▛███▜▌  ", "▝▜█████▛▘ ", "  ▘▘ ▝▝   "],
+  // arms-up
+  ["▗▟▛███▜▙▖ ", " ▜█████▛  ", "  ▘▘ ▝▝   "],
+  // look-left
+  [" ▐▟███▟▌  ", "▝▜█████▛▘ ", "  ▘▘ ▝▝   "],
+  // look-right
+  [" ▐▙███▙▌  ", "▝▜█████▛▘ ", "  ▘▘ ▝▝   "],
+];
+
+function printBanner(): void {
+  const pose = CLAWD_POSES[Math.floor(Math.random() * CLAWD_POSES.length)];
+  console.log("");
+  console.log(`  ${pose[0]} OpenClaude v0.1.0`);
+  console.log(`  ${pose[1]} Claude Code Gateway`);
+  console.log(`  ${pose[2]}`);
+  console.log("");
+}
+
 // --- gateway ---
 const gateway = program.command("gateway").description("Manage the gateway daemon");
 
@@ -99,8 +120,10 @@ gateway
 
       try {
         process.kill(child.pid!, 0);
-        console.log(`Gateway started (PID ${child.pid})`);
-        console.log(`Logs: ${logFile}`);
+        printBanner();
+        console.log(`  Gateway started (PID ${child.pid})`);
+        console.log(`  Logs: ${logFile}`);
+        console.log("");
       } catch {
         console.error("Gateway failed to start. Check logs:");
         console.error(`  tail -f ${logFile}`);
@@ -195,7 +218,9 @@ gateway
         }
       } catch {
         clearInterval(check);
-        console.log("Gateway stopped.");
+        printBanner();
+        console.log("  Gateway stopped.");
+        console.log("");
       }
     }, 500);
   });
@@ -256,8 +281,10 @@ gateway
 
     try {
       process.kill(child.pid!, 0);
-      console.log(`Gateway restarted (PID ${child.pid})`);
-      console.log(`Logs: ${logFile}`);
+      printBanner();
+      console.log(`  Gateway restarted (PID ${child.pid})`);
+      console.log(`  Logs: ${logFile}`);
+      console.log("");
     } catch {
       console.error("Gateway failed to start. Check logs:");
       console.error(`  tail -f ${logFile}`);
