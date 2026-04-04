@@ -24,6 +24,22 @@ export function registerHandlers(
     if (!messageHandler) return;
     const msg = contextToInbound(ctx);
     if (!msg) return;
+
+    // In groups, only respond when @mentioned or replied to
+    if (msg.isGroup) {
+      const botUsername = ctx.me.username;
+      const text = ctx.message.text;
+      const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.me.id;
+      const isMentioned = botUsername && text.includes(`@${botUsername}`);
+
+      if (!isMentioned && !isReplyToBot) return;
+
+      // Strip the @mention from the text
+      if (isMentioned && botUsername) {
+        msg.text = text.replace(new RegExp(`@${botUsername}`, "gi"), "").trim();
+      }
+    }
+
     await messageHandler(msg);
   });
 
@@ -31,7 +47,23 @@ export function registerHandlers(
     if (!messageHandler) return;
     const msg = contextToInbound(ctx);
     if (!msg) return;
-    msg.text = ctx.message.caption ?? "";
+
+    // In groups, only respond when @mentioned in caption or replied to
+    if (msg.isGroup) {
+      const botUsername = ctx.me.username;
+      const caption = ctx.message.caption ?? "";
+      const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.me.id;
+      const isMentioned = botUsername && caption.includes(`@${botUsername}`);
+      if (!isMentioned && !isReplyToBot) return;
+      if (isMentioned && botUsername) {
+        msg.text = caption.replace(new RegExp(`@${botUsername}`, "gi"), "").trim();
+      } else {
+        msg.text = caption;
+      }
+    } else {
+      msg.text = ctx.message.caption ?? "";
+    }
+
     const photo = ctx.message.photo;
     const largest = photo[photo.length - 1];
     msg.attachments = [{ type: "photo", fileId: largest.file_id }];
@@ -42,6 +74,13 @@ export function registerHandlers(
     if (!messageHandler) return;
     const msg = contextToInbound(ctx);
     if (!msg) return;
+
+    // In groups, only respond when replied to
+    if (msg.isGroup) {
+      const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.me.id;
+      if (!isReplyToBot) return;
+    }
+
     msg.text = ctx.message.caption ?? "";
     const doc = ctx.message.document;
     msg.attachments = [{ type: "document", fileId: doc.file_id, fileName: doc.file_name, mimeType: doc.mime_type }];
