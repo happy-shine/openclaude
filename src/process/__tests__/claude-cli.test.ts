@@ -40,8 +40,8 @@ describe("buildSpawnArgs", () => {
   it("builds args for resume session", () => {
     const args = buildSpawnArgs({ binary: "claude", extraArgs: [], claudeSessionId: "sess-123" });
     expect(args.args).toContain("--resume");
-    expect(args.args).toContain("--session-id");
     expect(args.args).toContain("sess-123");
+    expect(args.args).not.toContain("--session-id");
   });
 
   it("includes extra args", () => {

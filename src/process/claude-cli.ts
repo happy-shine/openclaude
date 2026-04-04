@@ -16,7 +16,7 @@ export function parseStreamEvent(line: string): StreamEvent | null {
 export function buildSpawnArgs(config: SpawnConfig): { cmd: string; args: string[] } {
   const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
   if (config.claudeSessionId) {
-    args.push("--resume", "--session-id", config.claudeSessionId);
+    args.push("--resume", config.claudeSessionId);
   }
   args.push(...config.extraArgs);
   return { cmd: config.binary, args };

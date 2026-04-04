@@ -45,7 +45,7 @@ channels:
     expect(updated.claudeSessionId).toBe("sess-abc");
 
     const resumeArgs = buildSpawnArgs({ binary: "claude", extraArgs: [], claudeSessionId: "sess-abc" });
-    expect(resumeArgs.args).toContain("--session-id");
+    expect(resumeArgs.args).toContain("--resume");
     expect(resumeArgs.args).toContain("sess-abc");
   });
 

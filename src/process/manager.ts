@@ -46,8 +46,12 @@ export class ProcessManager {
     };
 
     proc.on("exit", (code) => {
-      this.log.info({ sessionId: session.sessionId, code }, "Claude process exited");
-      this.processes.delete(session.sessionId);
+      this.log.info({ sessionId: session.sessionId, code, pid: proc.pid }, "Claude process exited");
+      // Only delete from map if this is still the current process for this session
+      const current = this.processes.get(session.sessionId);
+      if (current && current.process === proc) {
+        this.processes.delete(session.sessionId);
+      }
     });
 
     proc.stderr?.on("data", (data: Buffer) => {
