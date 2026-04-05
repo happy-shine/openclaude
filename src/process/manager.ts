@@ -6,6 +6,7 @@ import type { Session } from "../sessions/types.js";
 import { spawnClaude, sendUserMessage, readUntilResult } from "./claude-cli.js";
 import { getTelegramFileSkill } from "../skills/telegram-file.js";
 import { getSoulEditorSkill } from "../skills/soul-editor.js";
+import { getButtonSkill } from "../skills/telegram-buttons.js";
 
 export interface ProcessManagerConfig {
   binary: string;
@@ -67,6 +68,7 @@ export class ProcessManager {
     // Built-in skills
     parts.push(getTelegramFileSkill(this.config.apiPort, session.chatId));
     parts.push(getSoulEditorSkill(this.config.apiPort, this.config.botId));
+    parts.push(getButtonSkill());
 
     const extraArgs = [
       ...this.config.extraArgs,

@@ -1,6 +1,17 @@
 import type { TelegramAdapter } from "./channels/telegram/adapter.js";
 
-const FLUSH_INTERVAL = 3000;
+const TICK_INTERVAL = 3000; // setInterval rate (keeps glyph animation responsive)
+
+// Adaptive flush interval — exponential decay curve (capacitor charging)
+// Smoothly ramps from MIN to MAX with time constant TAU.
+//   t=0s → 3s,  t=30s → 5s,  t=60s → 7s,  t=2min → 10s,  t=5min+ → ~15s
+const FLUSH_MIN = 3_000;
+const FLUSH_MAX = 15_000;
+const FLUSH_TAU = 120_000; // 63% of the way to max at 2 minutes
+
+function getFlushInterval(elapsedMs: number): number {
+  return FLUSH_MIN + (FLUSH_MAX - FLUSH_MIN) * (1 - Math.exp(-elapsedMs / FLUSH_TAU));
+}
 
 // Ported from Claude Code: src/components/Spinner/utils.ts — getDefaultCharacters()
 // Grows then shrinks like a breathing pulse: · ✢ ✳ ✶ ✻ ✽ ✽ ✻ ✶ ✳ ✢ ·
@@ -76,7 +87,7 @@ export class ProgressTracker {
   start(): void {
     this.flushTimer = setInterval(() => {
       this.pendingFlush = this.flush().catch(() => {});
-    }, FLUSH_INTERVAL);
+    }, TICK_INTERVAL);
   }
 
   /** Stop auto-flush */
@@ -132,7 +143,8 @@ export class ProgressTracker {
   async flush(): Promise<void> {
     if (this.done || this.flushing) return;
     const now = Date.now();
-    if (now - this.lastFlush < FLUSH_INTERVAL) return;
+    const interval = getFlushInterval(now - this.globalStart);
+    if (now - this.lastFlush < interval) return;
 
     this.flushing = true;
     try {

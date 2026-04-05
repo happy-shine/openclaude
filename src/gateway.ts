@@ -251,9 +251,20 @@ export class Gateway {
             : (typeof event.result === "string" && event.result) || "";
 
           if (finalText.length > 0) {
-            await progress.sendOrEdit(finalText);
-            if (finalText.length > 4096) {
-              for (const chunk of splitMessage(finalText.slice(4096))) {
+            const { text: cleanText, buttons } = extractButtons(finalText);
+            if (buttons.length > 0) {
+              // Send/edit with inline keyboard buttons
+              const existingMsgId = progress.getMessageId();
+              if (existingMsgId) {
+                await this.telegram!.editMessage(msg.chatId, existingMsgId, cleanText, buttons);
+              } else {
+                await this.telegram!.sendWithButtons(msg.chatId, cleanText, buttons, msg.messageId);
+              }
+            } else {
+              await progress.sendOrEdit(cleanText);
+            }
+            if (cleanText.length > 4096) {
+              for (const chunk of splitMessage(cleanText.slice(4096))) {
                 await this.telegram!.send({ chatId: msg.chatId, text: chunk });
               }
             }
@@ -410,4 +421,26 @@ function formatMessageWithMeta(msg: InboundMessage): string {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Extract <<button>> patterns from trailing lines of the response.
+ * Only scans from the end — stops at the first line without buttons.
+ */
+function extractButtons(text: string): { text: string; buttons: string[] } {
+  const lines = text.split("\n");
+  const buttons: string[] = [];
+  let cutoff = lines.length;
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue; // skip trailing blank lines
+    const found = [...line.matchAll(/<<([^>]+)>>/g)].map((m) => m[1]);
+    if (found.length === 0) break;
+    buttons.unshift(...found);
+    cutoff = i;
+  }
+
+  if (buttons.length === 0) return { text, buttons: [] };
+  return { text: lines.slice(0, cutoff).join("\n").trimEnd(), buttons };
 }

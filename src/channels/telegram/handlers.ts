@@ -71,6 +71,45 @@ export function registerHandlers(
     }
   });
 
+  // --- Inline button callback ---
+  bot.on("callback_query:data", async (ctx) => {
+    const data = ctx.callbackQuery.data;
+    if (!data || !messageHandler) return;
+
+    await ctx.answerCallbackQuery();
+
+    // Edit message: show selection, remove buttons
+    try {
+      const orig = ctx.callbackQuery.message;
+      if (orig && "text" in orig) {
+        await ctx.editMessageText(orig.text + `\n\n→ ${data}`, {
+          reply_markup: { inline_keyboard: [] },
+        });
+      }
+    } catch {
+      // ignore edit failures
+    }
+
+    // Route as regular user message
+    const chat = ctx.callbackQuery.message?.chat;
+    const from = ctx.callbackQuery.from;
+    if (!chat) return;
+
+    const msg: InboundMessage = {
+      channelType: "telegram",
+      chatId: String(chat.id),
+      senderId: String(from.id),
+      senderName: [from.first_name, from.last_name].filter(Boolean).join(" ") || "Unknown",
+      messageId: String(ctx.callbackQuery.message?.message_id ?? ""),
+      text: data,
+      isGroup: chat.type === "group" || chat.type === "supergroup",
+      timestamp: Math.floor(Date.now() / 1000),
+      raw: ctx.callbackQuery,
+    };
+
+    await messageHandler(msg);
+  });
+
   bot.on("message:document", async (ctx) => {
     if (!messageHandler) return;
     const msg = contextToInbound(ctx);

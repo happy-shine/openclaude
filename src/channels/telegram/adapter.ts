@@ -88,10 +88,14 @@ export class TelegramAdapter implements ChannelAdapter {
     return lastMessageId;
   }
 
-  async editMessage(chatId: string, messageId: string, text: string): Promise<void> {
+  async editMessage(chatId: string, messageId: string, text: string, buttons?: string[]): Promise<void> {
     const truncated = text.slice(0, 4096);
     try {
-      await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated);
+      await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated, {
+        ...(buttons && buttons.length > 0
+          ? { reply_markup: { inline_keyboard: buildButtonRows(buttons) } }
+          : {}),
+      });
     } catch (err: unknown) {
       if (err instanceof Error && !err.message?.includes("message is not modified")) throw err;
     }
@@ -115,6 +119,18 @@ export class TelegramAdapter implements ChannelAdapter {
     });
   }
 
+  /** Send a message with inline keyboard buttons */
+  async sendWithButtons(chatId: string, text: string, buttons: string[], replyToMessageId?: string): Promise<string> {
+    const truncated = text.slice(0, 4096);
+    const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
+      ...(replyToMessageId
+        ? { reply_parameters: { message_id: Number(replyToMessageId) } }
+        : {}),
+      reply_markup: { inline_keyboard: buildButtonRows(buttons) },
+    });
+    return String(sent.message_id);
+  }
+
   /** Download a Telegram file to local disk, return local path */
   async downloadFile(fileId: string, destDir: string, fileName?: string): Promise<string> {
     const file = await this.bot.api.getFile(fileId);
@@ -134,4 +150,11 @@ export class TelegramAdapter implements ChannelAdapter {
     writeFileSync(localPath, buffer);
     return localPath;
   }
+}
+
+/** Build inline keyboard rows: ≤3 buttons → single row, >3 → one per row */
+function buildButtonRows(buttons: string[]): Array<Array<{ text: string; callback_data: string }>> {
+  const items = buttons.map((b) => ({ text: b, callback_data: b.slice(0, 64) }));
+  if (items.length <= 3) return [items];
+  return items.map((item) => [item]);
 }
