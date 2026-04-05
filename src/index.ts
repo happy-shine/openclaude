@@ -5,7 +5,7 @@ import pino from "pino";
 import { loadConfig } from "./config/loader.js";
 import { Gateway } from "./gateway.js";
 import { PairingManager } from "./auth/pairing.js";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import {
   writeFileSync,
@@ -77,6 +77,37 @@ function printBanner(): void {
   console.log("");
 }
 
+/** Check if Claude Code CLI is installed and accessible */
+function checkClaudeCli(configPath?: string): void {
+  let binary = "claude";
+  try {
+    const config = loadConfig(configPath);
+    if (config.claude.binary) binary = config.claude.binary;
+  } catch {}
+
+  const result = spawnSync(binary, ["--version"], { stdio: "pipe", timeout: 5000 });
+  if (result.error || result.status !== 0) {
+    console.error(`Error: Claude Code CLI not found ("${binary}").`);
+    console.error("");
+    console.error("OpenClaude requires Claude Code CLI as its engine.");
+    console.error("Install it with:");
+    console.error("");
+    console.error("  npm install -g @anthropic-ai/claude-code");
+    console.error("");
+    console.error("Then authenticate:");
+    console.error("");
+    console.error("  claude");
+    console.error("");
+    console.error("Docs: https://docs.anthropic.com/en/docs/claude-code");
+    process.exit(1);
+  }
+
+  const version = result.stdout?.toString().trim();
+  if (version) {
+    console.log(`Claude Code CLI: ${version}`);
+  }
+}
+
 // --- gateway ---
 const gateway = program.command("gateway").description("Manage the gateway daemon");
 
@@ -87,6 +118,7 @@ gateway
   .option("-v, --verbose", "Enable debug logging")
   .option("-f, --foreground", "Run in foreground (default: background daemon)")
   .action(async (opts: { config?: string; verbose?: boolean; foreground?: boolean }) => {
+    checkClaudeCli(opts.config);
     const dataDir = getDataDir(opts.config);
 
     // Check if already running
@@ -231,6 +263,7 @@ gateway
   .option("-c, --config <path>", "Path to config file")
   .option("-v, --verbose", "Enable debug logging")
   .action(async (opts: { config?: string; verbose?: boolean }) => {
+    checkClaudeCli(opts.config);
     const dataDir = getDataDir(opts.config);
     const pid = getRunningPid(dataDir);
 
