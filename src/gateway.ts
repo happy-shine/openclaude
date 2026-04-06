@@ -486,21 +486,20 @@ export class Gateway {
       await this.telegram!.send({ chatId: msg.chatId, text: "No active process." });
       return;
     }
-
-    const r = (resp.response ?? resp) as Record<string, unknown>;
-    const lines: string[] = ["Context Usage:"];
-    if (r.total !== undefined && r.limit !== undefined) {
-      const pct = Math.round((Number(r.total) / Number(r.limit)) * 100);
-      lines.push(`${Number(r.total).toLocaleString()} / ${Number(r.limit).toLocaleString()} tokens (${pct}%)`);
-    }
-    if (r.breakdown && typeof r.breakdown === "object") {
-      for (const [k, v] of Object.entries(r.breakdown as Record<string, unknown>)) {
-        if (typeof v === "number" && v > 0) lines.push(`  ${k}: ${v.toLocaleString()}`);
+    const text = formatControlResponse(resp, (r) => {
+      const lines: string[] = [];
+      if (r.total !== undefined && r.limit !== undefined) {
+        const pct = Math.round((Number(r.total) / Number(r.limit)) * 100);
+        lines.push(`Context: ${Number(r.total).toLocaleString()} / ${Number(r.limit).toLocaleString()} tokens (${pct}%)`);
       }
-    }
-    // Fallback: dump the raw response if nothing parsed
-    if (lines.length === 1) lines.push(JSON.stringify(r, null, 2).slice(0, 3000));
-    await this.telegram!.send({ chatId: msg.chatId, text: lines.join("\n") });
+      if (r.breakdown && typeof r.breakdown === "object") {
+        for (const [k, v] of Object.entries(r.breakdown as Record<string, unknown>)) {
+          if (typeof v === "number" && v > 0) lines.push(`  ${k}: ${v.toLocaleString()}`);
+        }
+      }
+      return lines.length > 0 ? lines.join("\n") : null;
+    });
+    await this.telegram!.send({ chatId: msg.chatId, text });
   }
 
   private async handleSettings(msg: InboundMessage): Promise<void> {
@@ -513,18 +512,15 @@ export class Gateway {
       await this.telegram!.send({ chatId: msg.chatId, text: "No active process." });
       return;
     }
-
-    const r = (resp.response ?? resp) as Record<string, unknown>;
-    // Extract key settings for display
-    const effective = r.effective ?? r;
-    const lines: string[] = ["Settings:"];
-    const show = ["model", "effortLevel", "permissionMode", "thinkingBudget", "customInstructions"];
-    for (const key of show) {
-      const val = (effective as Record<string, unknown>)[key];
-      if (val !== undefined && val !== null) lines.push(`  ${key}: ${String(val).slice(0, 100)}`);
-    }
-    if (lines.length === 1) lines.push(JSON.stringify(r, null, 2).slice(0, 3000));
-    await this.telegram!.send({ chatId: msg.chatId, text: lines.join("\n") });
+    const text = formatControlResponse(resp, (r) => {
+      const applied = r.applied as Record<string, unknown> | undefined;
+      if (!applied) return null;
+      const lines = ["Settings:"];
+      if (applied.model) lines.push(`  Model: ${applied.model}`);
+      if (applied.effort) lines.push(`  Effort: ${applied.effort}`);
+      return lines.length > 1 ? lines.join("\n") : null;
+    });
+    await this.telegram!.send({ chatId: msg.chatId, text });
   }
 
   getPairingManager(): PairingManager {
@@ -599,4 +595,21 @@ function extractButtons(text: string): { text: string; buttons: string[] } {
 
   if (buttons.length === 0) return { text, buttons: [] };
   return { text: lines.slice(0, cutoff).join("\n").trimEnd(), buttons };
+}
+
+/** Format a control_response — handle both success and error subtypes */
+function formatControlResponse(
+  resp: Record<string, unknown>,
+  onSuccess: (data: Record<string, unknown>) => string | null,
+): string {
+  const r = (resp.response ?? resp) as Record<string, unknown>;
+  if (r.subtype === "error") {
+    const err = String(r.error ?? "Unknown error");
+    if (err.includes("Unsupported")) {
+      return `Not supported by your Claude Code version. Try updating:\n  npm install -g @anthropic-ai/claude-code`;
+    }
+    return `Error: ${err}`;
+  }
+  const formatted = onSuccess(r);
+  return formatted ?? JSON.stringify(r, null, 2).slice(0, 3000);
 }
