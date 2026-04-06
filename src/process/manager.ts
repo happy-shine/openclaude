@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Logger } from "pino";
 import type { ClaudeProcess, StreamEvent } from "./types.js";
 import type { Session } from "../sessions/types.js";
-import { spawnClaude, sendUserMessage, readUntilResult } from "./claude-cli.js";
+import { spawnClaude, sendUserMessage, sendControlRequest, readUntilResult } from "./claude-cli.js";
 import { getTelegramFileSkill } from "../skills/telegram-file.js";
 import { getSoulEditorSkill } from "../skills/soul-editor.js";
 import { getButtonSkill } from "../skills/telegram-buttons.js";
@@ -212,5 +212,19 @@ export class ProcessManager {
 
   getWorkspaceDir(sessionId: string): string | undefined {
     return this.processes.get(sessionId)?.workspaceDir;
+  }
+
+  /** Send a control_request to a running session's Claude process */
+  sendControl(sessionId: string, request: Record<string, unknown>): boolean {
+    const cp = this.processes.get(sessionId);
+    if (!cp || cp.process.killed) return false;
+    sendControlRequest(cp.process, request);
+    return true;
+  }
+
+  /** Check if a session has a running process */
+  hasProcess(sessionId: string): boolean {
+    const cp = this.processes.get(sessionId);
+    return !!cp && !cp.process.killed;
   }
 }

@@ -39,6 +39,12 @@ export class TelegramAdapter implements ChannelAdapter {
       { command: "new", description: "Start a new session" },
       { command: "switch", description: "Switch to a session (e.g. /switch 2)" },
       { command: "sessions", description: "List all sessions" },
+      { command: "model", description: "Switch model (sonnet/opus/haiku)" },
+      { command: "effort", description: "Set thinking depth (low/medium/high/max)" },
+      { command: "stop", description: "Interrupt current task" },
+      { command: "cost", description: "Show accumulated cost" },
+      { command: "context", description: "Show context window usage" },
+      { command: "settings", description: "Show current settings" },
       { command: "help", description: "Show help" },
     ]);
 

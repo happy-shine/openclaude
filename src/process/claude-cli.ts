@@ -36,6 +36,16 @@ export function sendUserMessage(proc: ChildProcess, text: string): void {
   proc.stdin!.write(msg + "\n");
 }
 
+/** Send a control_request to the Claude process via stdin */
+export function sendControlRequest(proc: ChildProcess, request: Record<string, unknown>): void {
+  const msg = JSON.stringify({
+    type: "control_request",
+    request_id: `gw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    request,
+  });
+  proc.stdin!.write(msg + "\n");
+}
+
 export async function* readStreamEvents(proc: ChildProcess): AsyncGenerator<StreamEvent> {
   const rl = createInterface({ input: proc.stdout!, crlfDelay: Infinity });
   for await (const line of rl) {

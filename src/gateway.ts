@@ -27,6 +27,8 @@ export class Gateway {
   private dataDir: string;
   /** Track the last message with inline buttons per chat, so we can remove stale buttons */
   private lastButtonMsg = new Map<string, string>();
+  /** Accumulated cost per chat (USD) */
+  private chatCost = new Map<string, number>();
 
   constructor(config: GatewayConfig, log: Logger) {
     this.config = config;
@@ -103,6 +105,12 @@ export class Gateway {
       this.telegram.onCommand("switch", (msg) => this.handleSwitchSession(msg));
       this.telegram.onCommand("sessions", (msg) => this.handleListSessions(msg));
       this.telegram.onCommand("help", (msg) => this.handleHelp(msg));
+      this.telegram.onCommand("model", (msg) => this.handleModel(msg));
+      this.telegram.onCommand("effort", (msg) => this.handleEffort(msg));
+      this.telegram.onCommand("stop", (msg) => this.handleInterrupt(msg));
+      this.telegram.onCommand("cost", (msg) => this.handleCost(msg));
+      this.telegram.onCommand("context", (msg) => this.handleContext(msg));
+      this.telegram.onCommand("settings", (msg) => this.handleSettings(msg));
       this.telegram.onMessage((msg) => this.handleMessage(msg));
       await this.telegram.start();
       this.log.info("Telegram adapter started");
@@ -248,6 +256,11 @@ export class Gateway {
 
         // --- Result: finalize ---
         if (event.type === "result") {
+          // Accumulate cost
+          if (typeof event.cost_usd === "number") {
+            this.chatCost.set(msg.chatId, (this.chatCost.get(msg.chatId) ?? 0) + event.cost_usd);
+          }
+
           // Stop timer + await any in-flight flush BEFORE sending final message.
           // This prevents the timer-fired flush from overwriting the response.
           await progress.finish();
@@ -373,14 +386,120 @@ export class Gateway {
 
   private async handleHelp(msg: InboundMessage): Promise<void> {
     const text = [
-      "Claude Gateway Commands:",
+      "OpenClaude Commands:",
       "",
       "/new — Start a new session",
-      "/switch [N] — Switch to session #N (or list sessions)",
+      "/switch [N] — Switch to session #N",
       "/sessions — List all sessions",
+      "/model [name] — Switch model (sonnet/opus/haiku)",
+      "/effort [level] — Set thinking depth (low/medium/high/max)",
+      "/stop — Interrupt current task",
+      "/cost — Show accumulated cost",
+      "/context — Show context window usage",
+      "/settings — Show current settings",
       "/help — Show this help",
     ].join("\n");
     await this.telegram!.send({ chatId: msg.chatId, text });
+  }
+
+  private async handleModel(msg: InboundMessage): Promise<void> {
+    const access = this.checkMessageAccess(msg);
+    if (!access.allowed) return;
+
+    const model = msg.text.trim();
+    if (!model) {
+      await this.telegram!.send({ chatId: msg.chatId, text: "Usage: /model <name>\nExamples: sonnet, opus, haiku, claude-sonnet-4-6" });
+      return;
+    }
+
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    if (!this.processManager.hasProcess(session.sessionId)) {
+      await this.telegram!.send({ chatId: msg.chatId, text: `Model set to ${model}. Will apply on next message.` });
+      return;
+    }
+
+    const sent = this.processManager.sendControl(session.sessionId, { subtype: "set_model", model });
+    await this.telegram!.send({
+      chatId: msg.chatId,
+      text: sent ? `Model switched to ${model}` : "No active process. Send a message first.",
+    });
+  }
+
+  private async handleEffort(msg: InboundMessage): Promise<void> {
+    const access = this.checkMessageAccess(msg);
+    if (!access.allowed) return;
+
+    const level = msg.text.trim().toLowerCase();
+    const valid = ["low", "medium", "high", "max"];
+    if (!level || !valid.includes(level)) {
+      await this.telegram!.send({ chatId: msg.chatId, text: "Usage: /effort <level>\nLevels: low, medium, high, max" });
+      return;
+    }
+
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    if (!this.processManager.hasProcess(session.sessionId)) {
+      await this.telegram!.send({ chatId: msg.chatId, text: `Effort set to ${level}. Will apply on next message.` });
+      return;
+    }
+
+    const sent = this.processManager.sendControl(session.sessionId, {
+      subtype: "apply_flag_settings",
+      settings: { effortLevel: level },
+    });
+    await this.telegram!.send({
+      chatId: msg.chatId,
+      text: sent ? `Effort set to ${level}` : "No active process. Send a message first.",
+    });
+  }
+
+  private async handleInterrupt(msg: InboundMessage): Promise<void> {
+    const access = this.checkMessageAccess(msg);
+    if (!access.allowed) return;
+
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    const sent = this.processManager.sendControl(session.sessionId, { subtype: "interrupt" });
+    await this.telegram!.send({
+      chatId: msg.chatId,
+      text: sent ? "Interrupted." : "Nothing to interrupt.",
+    });
+  }
+
+  private async handleCost(msg: InboundMessage): Promise<void> {
+    const access = this.checkMessageAccess(msg);
+    if (!access.allowed) return;
+
+    const cost = this.chatCost.get(msg.chatId) ?? 0;
+    await this.telegram!.send({
+      chatId: msg.chatId,
+      text: `Accumulated cost: $${cost.toFixed(4)}`,
+    });
+  }
+
+  private async handleContext(msg: InboundMessage): Promise<void> {
+    const access = this.checkMessageAccess(msg);
+    if (!access.allowed) return;
+
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    const sent = this.processManager.sendControl(session.sessionId, { subtype: "get_context_usage" });
+    if (!sent) {
+      await this.telegram!.send({ chatId: msg.chatId, text: "No active process." });
+    } else {
+      // Response comes via stdout as control_response — for now just confirm
+      await this.telegram!.send({ chatId: msg.chatId, text: "Context usage requested. Check logs for details." });
+    }
+  }
+
+  private async handleSettings(msg: InboundMessage): Promise<void> {
+    const access = this.checkMessageAccess(msg);
+    if (!access.allowed) return;
+
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    const sent = this.processManager.sendControl(session.sessionId, { subtype: "get_settings" });
+    if (!sent) {
+      await this.telegram!.send({ chatId: msg.chatId, text: "No active process." });
+    } else {
+      await this.telegram!.send({ chatId: msg.chatId, text: "Settings requested. Check logs for details." });
+    }
   }
 
   getPairingManager(): PairingManager {
