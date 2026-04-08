@@ -11,6 +11,8 @@ export interface ApiServerConfig {
   dataDir: string;
   log: Logger;
   messageStore?: MessageStore;
+  /** Set of chat IDs allowed to query chat history (group chats only) */
+  allowedChatIds?: Set<string>;
 }
 
 export class ApiServer {
@@ -198,6 +200,14 @@ export class ApiServer {
     if (!chatId) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Missing chat_id" }));
+      return;
+    }
+
+    // Enforce chat isolation: only allow querying permitted chat IDs
+    if (this.config.allowedChatIds && !this.config.allowedChatIds.has(chatId)) {
+      this.log.warn({ chatId }, "Chat history query blocked: chat_id not in allowed set");
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Access denied: cannot query history for this chat" }));
       return;
     }
 

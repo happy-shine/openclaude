@@ -45,6 +45,21 @@ export function getRecentGroupContext(chatId: string, count: number = 20): strin
   if (!messageStore) return "";
   const messages = messageStore.getRecent(chatId, count);
   if (messages.length === 0) return "";
+  return formatMessages(messages);
+}
+
+/**
+ * Get group context with per-session deduplication.
+ * Only returns messages the session hasn't seen yet.
+ */
+export function getRecentGroupContextForSession(chatId: string, sessionId: string, fallback: number = 20): string {
+  if (!messageStore) return "";
+  const messages = messageStore.getRecentSince(chatId, sessionId, fallback);
+  if (messages.length === 0) return "";
+  return formatMessages(messages);
+}
+
+function formatMessages(messages: import("../../sessions/message-store.js").StoredMessage[]): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   const lines = messages.map((m) => {
     const dt = new Date(m.ts * 1000);

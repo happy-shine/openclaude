@@ -18,16 +18,22 @@ export class SessionManager {
     }
   }
 
-  resolve(chatId: string, channelType: string): Session {
+  resolve(chatId: string, channelType: string, isGroup?: boolean): Session {
     const state = this.chats.get(chatId);
     if (state) {
       const active = state.sessions.find((s) => s.sessionId === state.activeSessionId);
-      if (active) return active;
+      if (active) {
+        // Backfill isGroup for sessions created before this field existed
+        if (active.isGroup === undefined && isGroup !== undefined) {
+          active.isGroup = isGroup;
+        }
+        return active;
+      }
     }
-    return this.createFirst(chatId, channelType);
+    return this.createFirst(chatId, channelType, isGroup);
   }
 
-  private createFirst(chatId: string, channelType: string): Session {
+  private createFirst(chatId: string, channelType: string, isGroup?: boolean): Session {
     const session: Session = {
       sessionId: randomUUID(),
       chatId,
@@ -36,6 +42,7 @@ export class SessionManager {
       lastActiveAt: Date.now(),
       isActive: true,
       sessionNum: 1,
+      isGroup,
     };
     const state: ChatSessionState = {
       chatId,

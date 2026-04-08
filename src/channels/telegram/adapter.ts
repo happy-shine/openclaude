@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
 import type { Logger } from "pino";
 import type { ChannelAdapter, OutboundMessage, MessageHandler, CommandHandler } from "../types.js";
+import type { MessageStore } from "../../sessions/message-store.js";
 import { createBot } from "./bot.js";
 import { registerHandlers } from "./handlers.js";
 import { splitMessage } from "./formatter.js";
@@ -16,11 +17,39 @@ export class TelegramAdapter implements ChannelAdapter {
   private messageHandler?: MessageHandler;
   private commandHandlers = new Map<string, CommandHandler>();
   private stopped = false;
+  private messageStore?: MessageStore;
+  private botName: string;
 
   constructor(token: string, log: Logger) {
     this.token = token;
     this.log = log.child({ module: "telegram" });
     this.bot = createBot(token, this.log);
+    this.botName = "Bot";
+  }
+
+  /** Inject MessageStore so outbound messages are recorded for chat history */
+  setMessageStore(store: MessageStore, botName?: string): void {
+    this.messageStore = store;
+    if (botName) this.botName = botName;
+  }
+
+  /** Record an outbound message to the store and advance all session cursors for this chat */
+  private recordOutbound(chatId: string, messageId: string, text: string): void {
+    if (!this.messageStore) return;
+    // Only record for group chats (negative chat IDs in Telegram)
+    if (!chatId.startsWith("-")) return;
+    this.messageStore.append(chatId, {
+      id: messageId,
+      ts: Math.floor(Date.now() / 1000),
+      sender: this.botName,
+      senderId: this.token.split(":")[0],
+      text,
+    });
+  }
+
+  /** Advance a session's cursor past our own reply so it's not re-injected as context */
+  advanceCursorForSession(sessionId: string, messageId: string): void {
+    this.messageStore?.advanceCursor(sessionId, messageId);
   }
 
   onMessage(handler: MessageHandler): void {
@@ -35,10 +64,11 @@ export class TelegramAdapter implements ChannelAdapter {
     registerHandlers(this.bot, this.messageHandler, this.commandHandlers, this.log);
 
     // Register commands with Telegram so they show in the menu
-    await this.bot.api.setMyCommands([
+    const commands = [
       { command: "new", description: "Start a new session" },
       { command: "switch", description: "Switch to a session (e.g. /switch 2)" },
       { command: "sessions", description: "List all sessions" },
+      { command: "title", description: "Set session title (empty = auto)" },
       { command: "model", description: "Switch model (sonnet/opus/haiku)" },
       { command: "effort", description: "Set thinking depth (low/medium/high/max)" },
       { command: "stop", description: "Interrupt current task" },
@@ -46,7 +76,12 @@ export class TelegramAdapter implements ChannelAdapter {
       { command: "context", description: "Show context window usage" },
       { command: "settings", description: "Show current settings" },
       { command: "help", description: "Show help" },
-    ]);
+    ];
+    // Register for both default (DM) and group scopes
+    await this.bot.api.setMyCommands(commands);
+    await this.bot.api.setMyCommands(commands, {
+      scope: { type: "all_group_chats" },
+    });
 
     this.startPollingWithRetry();
   }
@@ -90,6 +125,7 @@ export class TelegramAdapter implements ChannelAdapter {
           : {}),
       });
       lastMessageId = String(sent.message_id);
+      this.recordOutbound(msg.chatId, String(sent.message_id), chunks[i]);
     }
     return lastMessageId;
   }
@@ -154,6 +190,7 @@ export class TelegramAdapter implements ChannelAdapter {
         : {}),
       reply_markup: { inline_keyboard: buildButtonRows(buttons) },
     });
+    this.recordOutbound(chatId, String(sent.message_id), truncated);
     return String(sent.message_id);
   }
 

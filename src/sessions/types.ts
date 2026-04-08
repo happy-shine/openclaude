@@ -8,6 +8,7 @@ export interface Session {
   title?: string;
   isActive: boolean;
   sessionNum: number;
+  isGroup?: boolean;
 }
 
 export interface ChatSessionState {

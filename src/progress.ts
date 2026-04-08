@@ -186,14 +186,13 @@ export class ProgressTracker {
   }
 
   private buildDisplay(): string | null {
-    const hasActivity = this.currentLabel || this.completed.length > 0;
-
-    // No active tools and buffer has text — pure response mode
-    if (this.buffer.length > 0 && !this.currentLabel) {
-      return this.buffer.slice(0, 4096);
+    // All tools done and buffer has text — let result handler take over.
+    // This prevents duplicate messages from flush and result handler both sending buffer.
+    if (!this.currentLabel && this.buffer.length > 0) {
+      return null;
     }
 
-    // Build status display
+    // Build status display (progress only, never raw buffer text)
     const lines: string[] = [];
 
     // Pulsing glyph + fixed verb header (Claude Code style)

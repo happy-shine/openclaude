@@ -3,7 +3,7 @@ import type { GatewayConfig } from "./config/types.js";
 import type { InboundMessage } from "./channels/types.js";
 import type { StreamEvent } from "./process/types.js";
 import { TelegramAdapter } from "./channels/telegram/adapter.js";
-import { getRecentGroupContext, setMessageStore } from "./channels/telegram/handlers.js";
+import { getRecentGroupContext, getRecentGroupContextForSession, setMessageStore } from "./channels/telegram/handlers.js";
 import { MessageStore } from "./sessions/message-store.js";
 import { SessionManager } from "./sessions/manager.js";
 import { SessionStore } from "./sessions/store.js";
@@ -109,6 +109,7 @@ export class Gateway {
     const tgConfig = this.config.channels.telegram;
     if (tgConfig) {
       this.telegram = new TelegramAdapter(tgConfig.botToken, this.log);
+      this.telegram.setMessageStore(this.messageStore);
       this.telegram.onCommand("new", (msg) => this.handleNewSession(msg));
       this.telegram.onCommand("switch", (msg) => this.handleSwitchSession(msg));
       this.telegram.onCommand("sessions", (msg) => this.handleListSessions(msg));
@@ -119,17 +120,21 @@ export class Gateway {
       this.telegram.onCommand("cost", (msg) => this.handleCost(msg));
       this.telegram.onCommand("context", (msg) => this.handleContext(msg));
       this.telegram.onCommand("settings", (msg) => this.handleSettings(msg));
+      this.telegram.onCommand("title", (msg) => this.handleTitle(msg));
       this.telegram.onMessage((msg) => this.enqueueChat(msg));
       await this.telegram.start();
       this.log.info("Telegram adapter started");
 
       // Start API server for file sending
+      // Build allowed chat IDs from configured groups for chat history isolation
+      const allowedChatIds = new Set<string>(Object.keys(tgConfig.groups ?? {}));
       this.apiServer = new ApiServer({
         port: this.config.gateway.port,
         telegram: this.telegram,
         dataDir: this.dataDir,
         log: this.log,
         messageStore: this.messageStore,
+        allowedChatIds,
       });
       await this.apiServer.start();
     }
@@ -194,7 +199,7 @@ export class Gateway {
       return;
     }
 
-    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType, msg.isGroup);
 
     if (!session.title && msg.text) {
       this.sessionManager.update(session.sessionId, { title: msg.text.slice(0, 50) });
@@ -210,7 +215,7 @@ export class Gateway {
     }
 
     // Build message with metadata (sender, time, reply context)
-    let messageText = formatMessageWithMeta(msg);
+    let messageText = formatMessageWithMeta(msg, session.sessionId);
 
     // Collect all attachments to download (current message + reply media)
     const allAttachments = [
@@ -359,6 +364,15 @@ export class Gateway {
 
     this.sessionManager.update(session.sessionId, { lastActiveAt: Date.now() });
     await this.sessionManager.flush(msg.chatId);
+
+    // Advance this session's cursor past all messages (including our own replies)
+    // so they won't be re-injected as group context next time
+    if (msg.isGroup) {
+      const latest = this.messageStore.getRecent(msg.chatId, 1);
+      if (latest.length > 0) {
+        this.messageStore.advanceCursor(session.sessionId, latest[0].id);
+      }
+    }
   }
 
   private async handlePairingChallenge(msg: InboundMessage): Promise<void> {
@@ -447,6 +461,7 @@ export class Gateway {
       "/stop — Interrupt current task",
       "/cost — Show accumulated cost",
       "/context — Show context window usage",
+      "/title [text] — Set session title (empty = auto-generate)",
       "/settings — Show current settings",
       "/help — Show this help",
     ].join("\n");
@@ -573,6 +588,65 @@ export class Gateway {
     await this.telegram!.send({ chatId: msg.chatId, text });
   }
 
+  private async handleTitle(msg: InboundMessage): Promise<void> {
+    const access = this.checkMessageAccess(msg);
+    if (!access.allowed) return;
+
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    const userTitle = msg.text.trim();
+
+    if (userTitle) {
+      // /title <text> → use provided title
+      this.sessionManager.update(session.sessionId, { title: userTitle.slice(0, 80) });
+      await this.sessionManager.flush(msg.chatId);
+      await this.telegram!.send({
+        chatId: msg.chatId,
+        text: `Session #${session.sessionNum} title set to: "${userTitle.slice(0, 80)}"`,
+      });
+    } else {
+      // /title (no arg) → ask Claude Code to generate a title
+      const messageText = "Generate a short title (under 30 characters, Chinese preferred) that summarizes this conversation. Reply with ONLY the title text, nothing else.";
+      const progress = new ProgressTracker(this.telegram!, msg.chatId, msg.messageId);
+      progress.start();
+      try {
+        let generatedTitle = "";
+        for await (const event of this.processManager.sendMessage(session, messageText)) {
+          if (event.type === "assistant" && event.message) {
+            const content = event.message.content;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (typeof block === "object" && block !== null && "text" in block) {
+                  generatedTitle += (block as { text: string }).text;
+                }
+              }
+            } else if (typeof content === "string") {
+              generatedTitle += content;
+            }
+          }
+          if (event.type === "result") {
+            await progress.finish();
+            const title = generatedTitle.trim().replace(/^["']|["']$/g, "").slice(0, 80) || "(untitled)";
+            this.sessionManager.update(session.sessionId, { title });
+            await this.sessionManager.flush(msg.chatId);
+            const progressMsgId = progress.getMessageId();
+            if (progressMsgId) {
+              await this.telegram!.editMessage(msg.chatId, progressMsgId, `Session #${session.sessionNum} title: "${title}"`);
+            } else {
+              await this.telegram!.send({
+                chatId: msg.chatId,
+                text: `Session #${session.sessionNum} title: "${title}"`,
+              });
+            }
+            break;
+          }
+          await progress.flush();
+        }
+      } finally {
+        progress.stop();
+      }
+    }
+  }
+
   getPairingManager(): PairingManager {
     return this.pairingManager;
   }
@@ -598,16 +672,18 @@ function formatAge(ms: number): string {
 }
 
 /** Format message with sender name, timestamp, reply/quote context, and group history */
-function formatMessageWithMeta(msg: InboundMessage): string {
+function formatMessageWithMeta(msg: InboundMessage, sessionId?: string): string {
   const dt = new Date(msg.timestamp * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
   const ts = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
 
   const lines: string[] = [];
 
-  // Prepend recent group chat context (silent ingest buffer)
+  // Prepend recent group chat context (with per-session dedup if sessionId available)
   if (msg.isGroup) {
-    const groupContext = getRecentGroupContext(msg.chatId, 20);
+    const groupContext = sessionId
+      ? getRecentGroupContextForSession(msg.chatId, sessionId, 20)
+      : getRecentGroupContext(msg.chatId, 20);
     if (groupContext) {
       lines.push("--- Recent group chat context ---");
       lines.push(groupContext);

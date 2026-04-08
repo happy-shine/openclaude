@@ -70,7 +70,9 @@ export class ProcessManager {
     parts.push(getTelegramFileSkill(this.config.apiPort, session.chatId));
     parts.push(getSoulEditorSkill(this.config.apiPort, this.config.botId));
     parts.push(getButtonSkill());
-    parts.push(getChatHistorySkill(this.config.apiPort, session.chatId));
+    if (session.isGroup) {
+      parts.push(getChatHistorySkill(this.config.apiPort, session.chatId));
+    }
 
     const extraArgs = [
       ...this.config.extraArgs,
