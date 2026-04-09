@@ -280,16 +280,19 @@ export class ProcessManager {
   async *forkAndAsk(session: Session, question: string): AsyncGenerator<StreamEvent> {
     if (!session.claudeSessionId) return;
 
-    const cwd = join(this.config.workspaceDir, session.chatId, session.sessionId);
+    // Must match the main process's cwd for --resume to find the session
+    const safeChatId = session.chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const cwd = join(this.config.workspaceDir, this.config.botId, `${safeChatId}_${session.sessionId}`);
     mkdirSync(cwd, { recursive: true });
 
     const args = [
       "-p",
+      "--verbose",
       "--output-format", "stream-json",
       "--resume", session.claudeSessionId,
       "--fork-session",
       "--permission-mode", "bypassPermissions",
-      "--max-turns", "1",
+      question,
     ];
 
     this.log.info(
@@ -298,7 +301,7 @@ export class ProcessManager {
     );
 
     const proc = spawn(this.config.binary, args, {
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       cwd,
       env: { ...process.env },
     });
@@ -307,9 +310,6 @@ export class ProcessManager {
       const text = data.toString().trim();
       if (text) this.log.warn("btw stderr: " + text);
     });
-
-    // Send question as plain text and close stdin
-    proc.stdin!.end(question + "\n");
 
     yield* readUntilResult(proc);
   }
