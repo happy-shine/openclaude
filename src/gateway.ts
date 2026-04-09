@@ -478,29 +478,82 @@ export class Gateway {
       "/btw: forking session",
     );
 
-    // Simple approach: collect result text directly from events, skip ProgressTracker
-    await this.telegram!.sendTyping(msg.chatId);
+    const progress = new ProgressTracker(this.telegram!, msg.chatId, msg.messageId);
+    progress.start();
 
     try {
-      let resultText = "";
       for await (const event of this.processManager.forkAndAsk(session, question)) {
-        if (event.type === "result") {
-          resultText = (typeof event.result === "string" && event.result) || "";
+        if (event.type === "stream_event" && event.event) {
+          const raw = event.event as Record<string, unknown>;
+          if (raw.type === "content_block_start") {
+            const block = raw.content_block as Record<string, unknown> | undefined;
+            if (block?.type === "thinking") progress.startThinking();
+          }
         }
-      }
 
-      if (resultText) {
-        const chunks = splitMessage(resultText);
-        for (const chunk of chunks) {
-          await this.telegram!.send({ chatId: msg.chatId, text: chunk, replyToMessageId: msg.messageId });
+        if (event.type === "assistant" && event.message) {
+          const content = event.message.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (typeof block !== "object" || block === null) continue;
+              const b = block as Record<string, unknown>;
+              if (b.type === "tool_use" && typeof b.name === "string") {
+                progress.startTool(b.name, undefined);
+              }
+              if ("text" in b && typeof b.text === "string") {
+                progress.appendText(b.text);
+              }
+            }
+          } else if (typeof content === "string") {
+            progress.appendText(content);
+          }
         }
-      } else {
-        await this.telegram!.send({ chatId: msg.chatId, text: "(No response)", replyToMessageId: msg.messageId });
+
+        if (event.type === "result") {
+          await progress.finish();
+          const buf = progress.getBuffer();
+          const finalText = buf.length > 0
+            ? buf
+            : (typeof event.result === "string" && event.result) || "";
+
+          if (finalText.length > 0) {
+            const progressMsgId = progress.getMessageId();
+            const chunks = splitMessage(finalText);
+            if (progressMsgId) {
+              await this.telegram!.editMessage(msg.chatId, progressMsgId, chunks[0]);
+              for (const chunk of chunks.slice(1)) {
+                await this.telegram!.send({ chatId: msg.chatId, text: chunk });
+              }
+            } else {
+              for (let i = 0; i < chunks.length; i++) {
+                await this.telegram!.send({
+                  chatId: msg.chatId,
+                  text: chunks[i],
+                  ...(i === 0 ? { replyToMessageId: msg.messageId } : {}),
+                });
+              }
+            }
+          } else if (event.is_error) {
+            const progressMsgId = progress.getMessageId();
+            const errText = `btw error: ${event.result ?? "Unknown error"}`;
+            if (progressMsgId) {
+              await this.telegram!.editMessage(msg.chatId, progressMsgId, errText);
+            } else {
+              await this.telegram!.send({ chatId: msg.chatId, text: errText });
+            }
+          }
+          break;
+        }
+
+        await progress.flush();
       }
     } catch (err) {
+      await progress.finish();
       const errMsg = err instanceof Error ? err.message : String(err);
       this.log.error({ error: errMsg }, "/btw failed");
       await this.telegram!.send({ chatId: msg.chatId, text: `btw error: ${errMsg}` });
+    } finally {
+      progress.stop();
     }
   }
 
