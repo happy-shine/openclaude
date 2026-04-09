@@ -12,6 +12,14 @@ const mediaGroupBuffers = new Map<string, {
 
 const MEDIA_GROUP_WAIT_MS = 500;
 
+/** System callback handlers — keyed by prefix before ':' (e.g. "sw", "pg") */
+const callbackHandlers = new Map<string, (ctx: Context) => Promise<void>>();
+
+/** Register a system callback handler for a given prefix */
+export function onCallback(prefix: string, handler: (ctx: Context) => Promise<void>): void {
+  callbackHandlers.set(prefix, handler);
+}
+
 /** Message store instance, set via setMessageStore() */
 let messageStore: MessageStore | undefined;
 
@@ -160,7 +168,17 @@ export function registerHandlers(
   // --- Inline button callback ---
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
-    if (!data || !messageHandler) return;
+    if (!data) return;
+
+    // Check for system callback handlers first (e.g. session switch, pagination)
+    const systemHandler = callbackHandlers.get(data.split(":")[0]);
+    if (systemHandler) {
+      await ctx.answerCallbackQuery();
+      await systemHandler(ctx);
+      return;
+    }
+
+    if (!messageHandler) return;
 
     await ctx.answerCallbackQuery();
 

@@ -66,8 +66,7 @@ export class TelegramAdapter implements ChannelAdapter {
     // Register commands with Telegram so they show in the menu
     const commands = [
       { command: "new", description: "Start a new session" },
-      { command: "switch", description: "Switch to a session (e.g. /switch 2)" },
-      { command: "sessions", description: "List all sessions" },
+      { command: "sessions", description: "List sessions or switch (e.g. /sessions 2)" },
       { command: "title", description: "Set session title (empty = auto)" },
       { command: "model", description: "Switch model (sonnet/opus/haiku)" },
       { command: "effort", description: "Set thinking depth (low/medium/high/max)" },
@@ -178,6 +177,27 @@ export class TelegramAdapter implements ChannelAdapter {
       });
     } catch {
       // ignore — message may have been deleted or already has no buttons
+    }
+  }
+
+  /** Send a message with a custom inline keyboard layout */
+  async sendWithKeyboard(chatId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>): Promise<string> {
+    const truncated = text.slice(0, 4096);
+    const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
+      reply_markup: { inline_keyboard: keyboard },
+    });
+    return String(sent.message_id);
+  }
+
+  /** Edit a message's text and inline keyboard */
+  async editMessageWithKeyboard(chatId: string, messageId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>): Promise<void> {
+    const truncated = text.slice(0, 4096);
+    try {
+      await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated, {
+        reply_markup: { inline_keyboard: keyboard },
+      });
+    } catch (err: unknown) {
+      if (err instanceof Error && !err.message?.includes("message is not modified")) throw err;
     }
   }
 

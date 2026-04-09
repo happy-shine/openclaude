@@ -3,7 +3,7 @@ import type { GatewayConfig } from "./config/types.js";
 import type { InboundMessage } from "./channels/types.js";
 import type { StreamEvent } from "./process/types.js";
 import { TelegramAdapter } from "./channels/telegram/adapter.js";
-import { getRecentGroupContext, getRecentGroupContextForSession, setMessageStore } from "./channels/telegram/handlers.js";
+import { getRecentGroupContext, getRecentGroupContextForSession, setMessageStore, onCallback } from "./channels/telegram/handlers.js";
 import { MessageStore } from "./sessions/message-store.js";
 import { SessionManager } from "./sessions/manager.js";
 import { SessionStore } from "./sessions/store.js";
@@ -111,8 +111,7 @@ export class Gateway {
       this.telegram = new TelegramAdapter(tgConfig.botToken, this.log);
       this.telegram.setMessageStore(this.messageStore);
       this.telegram.onCommand("new", (msg) => this.handleNewSession(msg));
-      this.telegram.onCommand("switch", (msg) => this.handleSwitchSession(msg));
-      this.telegram.onCommand("sessions", (msg) => this.handleListSessions(msg));
+      this.telegram.onCommand("sessions", (msg) => this.handleSessionsCommand(msg));
       this.telegram.onCommand("help", (msg) => this.handleHelp(msg));
       this.telegram.onCommand("model", (msg) => this.handleModel(msg));
       this.telegram.onCommand("effort", (msg) => this.handleEffort(msg));
@@ -121,6 +120,69 @@ export class Gateway {
       this.telegram.onCommand("context", (msg) => this.handleContext(msg));
       this.telegram.onCommand("settings", (msg) => this.handleSettings(msg));
       this.telegram.onCommand("title", (msg) => this.handleTitle(msg));
+
+      // Register system callback handlers for session picker
+      onCallback("sw", async (ctx) => {
+        const data = (ctx as any).callbackQuery?.data as string;
+        const parts = data.split(":");
+        const chatId = parts[1];
+        const index = parseInt(parts[2], 10);
+        if (!chatId || isNaN(index)) return;
+        const switched = this.sessionManager.switchTo(chatId, index);
+        if (switched) {
+          try {
+            const orig = (ctx as any).callbackQuery?.message;
+            if (orig && "text" in orig) {
+              await (ctx as any).editMessageText(orig.text, { reply_markup: { inline_keyboard: [] } });
+            }
+          } catch { /* ignore */ }
+          await this.telegram!.send({ chatId, text: `Switched to session #${index}: ${switched.title ?? "(untitled)"}` });
+          await this.sessionManager.flush(chatId);
+        }
+      });
+
+      onCallback("pg", async (ctx) => {
+        const data = (ctx as any).callbackQuery?.data as string;
+        const parts = data.split(":");
+        const chatId = parts[1];
+        const page = parseInt(parts[2], 10);
+        if (!chatId || isNaN(page)) return;
+        const orig = (ctx as any).callbackQuery?.message;
+        if (!orig) return;
+        const messageId = String(orig.message_id);
+        // Rebuild session list for the requested page
+        const sessions = this.sessionManager.list(chatId);
+        const perPage = Gateway.SESSIONS_PER_PAGE;
+        const totalPages = Math.ceil(sessions.length / perPage);
+        const p = Math.max(0, Math.min(page, totalPages - 1));
+        const slice = sessions.slice(p * perPage, (p + 1) * perPage);
+        const lines = slice.map((s, i) => {
+          const idx = p * perPage + i + 1;
+          const active = s.isActive ? " << active" : "";
+          const title = s.title ?? "(untitled)";
+          const age = formatAge(Date.now() - s.lastActiveAt);
+          return `#${idx}  "${title}"  ${age}${active}`;
+        });
+        const sessionButtons = slice.map((_, i) => {
+          const idx = p * perPage + i + 1;
+          return { text: `${idx}`, callback_data: `sw:${chatId}:${idx}` };
+        });
+        const buttonRows: Array<Array<{ text: string; callback_data: string }>> = [];
+        for (let i = 0; i < sessionButtons.length; i += 5) {
+          buttonRows.push(sessionButtons.slice(i, i + 5));
+        }
+        if (totalPages > 1) {
+          const navRow: Array<{ text: string; callback_data: string }> = [];
+          if (p > 0) navRow.push({ text: "◀ Prev", callback_data: `pg:${chatId}:${p - 1}` });
+          navRow.push({ text: `${p + 1}/${totalPages}`, callback_data: "noop" });
+          if (p < totalPages - 1) navRow.push({ text: "Next ▶", callback_data: `pg:${chatId}:${p + 1}` });
+          buttonRows.push(navRow);
+        }
+        await this.telegram!.editMessageWithKeyboard(chatId, messageId, lines.join("\n"), buttonRows);
+      });
+
+      onCallback("noop", async () => { /* do nothing */ });
+
       this.telegram.onMessage((msg) => this.enqueueChat(msg));
       await this.telegram.start();
       this.log.info("Telegram adapter started");
@@ -404,33 +466,34 @@ export class Gateway {
     await this.sessionManager.flush(msg.chatId);
   }
 
-  private async handleSwitchSession(msg: InboundMessage): Promise<void> {
-    const access = this.checkMessageAccess(msg);
-    if (!access.allowed) return;
-
+  private async handleSessionsCommand(msg: InboundMessage): Promise<void> {
     const index = parseInt(msg.text, 10);
-    if (isNaN(index)) {
-      await this.handleListSessions(msg);
-      return;
-    }
-
-    const switched = this.sessionManager.switchTo(msg.chatId, index);
-    if (!switched) {
+    if (!isNaN(index)) {
+      // /sessions N → switch to session #N
+      const access = this.checkMessageAccess(msg);
+      if (!access.allowed) return;
+      const switched = this.sessionManager.switchTo(msg.chatId, index);
+      if (!switched) {
+        await this.telegram!.send({
+          chatId: msg.chatId,
+          text: `Session #${index} not found. Use /sessions to see available sessions.`,
+        });
+        return;
+      }
       await this.telegram!.send({
         chatId: msg.chatId,
-        text: `Session #${index} not found. Use /sessions to see available sessions.`,
+        text: `Switched to session #${index}: ${switched.title ?? "(untitled)"}`,
       });
+      await this.sessionManager.flush(msg.chatId);
       return;
     }
-
-    await this.telegram!.send({
-      chatId: msg.chatId,
-      text: `Switched to session #${index}: ${switched.title ?? "(untitled)"}`,
-    });
-    await this.sessionManager.flush(msg.chatId);
+    // /sessions → list with buttons
+    await this.handleListSessions(msg);
   }
 
-  private async handleListSessions(msg: InboundMessage): Promise<void> {
+  private static readonly SESSIONS_PER_PAGE = 10;
+
+  private async handleListSessions(msg: InboundMessage, page = 0): Promise<void> {
     const access = this.checkMessageAccess(msg);
     if (!access.allowed) return;
 
@@ -440,13 +503,40 @@ export class Gateway {
       return;
     }
 
-    const lines = sessions.map((s, i) => {
+    const perPage = Gateway.SESSIONS_PER_PAGE;
+    const totalPages = Math.ceil(sessions.length / perPage);
+    const p = Math.max(0, Math.min(page, totalPages - 1));
+    const slice = sessions.slice(p * perPage, (p + 1) * perPage);
+
+    const lines = slice.map((s, i) => {
+      const idx = p * perPage + i + 1;
       const active = s.isActive ? " << active" : "";
       const title = s.title ?? "(untitled)";
       const age = formatAge(Date.now() - s.lastActiveAt);
-      return `#${i + 1}  "${title}"  ${age}${active}`;
+      return `#${idx}  "${title}"  ${age}${active}`;
     });
-    await this.telegram!.send({ chatId: msg.chatId, text: lines.join("\n") });
+    const text = lines.join("\n");
+
+    // Build inline keyboard: one row of session buttons, then nav row
+    const sessionButtons = slice.map((_, i) => {
+      const idx = p * perPage + i + 1;
+      return { text: `${idx}`, callback_data: `sw:${msg.chatId}:${idx}` };
+    });
+    // Split into rows of 5
+    const buttonRows: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (let i = 0; i < sessionButtons.length; i += 5) {
+      buttonRows.push(sessionButtons.slice(i, i + 5));
+    }
+    // Navigation row
+    if (totalPages > 1) {
+      const navRow: Array<{ text: string; callback_data: string }> = [];
+      if (p > 0) navRow.push({ text: "◀ Prev", callback_data: `pg:${msg.chatId}:${p - 1}` });
+      navRow.push({ text: `${p + 1}/${totalPages}`, callback_data: "noop" });
+      if (p < totalPages - 1) navRow.push({ text: "Next ▶", callback_data: `pg:${msg.chatId}:${p + 1}` });
+      buttonRows.push(navRow);
+    }
+
+    await this.telegram!.sendWithKeyboard(msg.chatId, text, buttonRows);
   }
 
   private async handleHelp(msg: InboundMessage): Promise<void> {
@@ -454,8 +544,7 @@ export class Gateway {
       "OpenClaude Commands:",
       "",
       "/new — Start a new session",
-      "/switch [N] — Switch to session #N",
-      "/sessions — List all sessions",
+      "/sessions [N] — List sessions or switch to #N",
       "/model [name] — Switch model (sonnet/opus/haiku)",
       "/effort [level] — Set thinking depth (low/medium/high/max)",
       "/stop — Interrupt current task",
