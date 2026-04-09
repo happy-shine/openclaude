@@ -8,13 +8,18 @@ Telegram ←→ OpenClaude Gateway ←→ Claude Code CLI (subprocess)
 
 Each conversation spawns a real Claude Code process. Claude can read/write files, run commands, search the web — everything it can do in your terminal, now accessible from your phone.
 
+[中文文档](README_zh.md)
+
 ## Features
 
 - **Claude Code as engine** — not an API wrapper. Each session is a full Claude Code subprocess with tool use, file I/O, and bash access
-- **Session management** — `/new`, `/switch`, `/sessions` commands. Multiple sessions per chat, each with its own workspace
+- **Session management** — `/new`, `/sessions` with inline buttons. Multiple sessions per chat, each with its own workspace
+- **`/btw` side questions** — ask a non-blocking question in parallel without interrupting the current session
+- **Rich commands** — `/model`, `/effort`, `/stop`, `/cost`, `/context`, `/settings` for live session control
+- **Inline buttons** — session picker and choices rendered as tappable Telegram buttons; stale buttons auto-removed
 - **Access control** — allowlist + pairing code flow. No strangers can use your bot
-- **Group chat support** — responds to @mentions and replies in groups
-- **File sharing** — upload files to Claude, Claude sends files back to you
+- **Group chat support** — responds to @mentions and replies; message history with sender/timestamp context injected into Claude
+- **File sharing** — upload files to Claude, Claude sends files back to you; reply attachments forwarded
 - **SOUL.md personality** — customize your bot's personality per-bot. Claude can even edit its own SOUL via user instructions
 - **Live progress** — pulsing status indicator shows what Claude is doing (thinking, reading, writing, running commands)
 - **Daemon mode** — runs in background with log persistence, auto-restart on crash
@@ -139,11 +144,29 @@ openclaude agent path               Print SOUL.md file path
 | Command | Description |
 |---------|-------------|
 | `/new` | Start a new session |
-| `/switch N` | Switch to session #N |
-| `/sessions` | List all sessions |
+| `/sessions` | List all sessions with inline picker buttons |
+| `/btw <question>` | Ask a side question without interrupting the current session |
+| `/model [name]` | Show or set the model (e.g. `opus`, `sonnet`) |
+| `/effort [level]` | Show or set effort level |
+| `/stop` | Interrupt Claude's current response |
+| `/cost` | Show session cost so far |
+| `/context` | Show context window usage |
+| `/settings` | Show current session settings |
 | `/help` | Show help |
 
 In groups, the bot responds when **@mentioned** or **replied to**.
+
+### `/btw` — Non-blocking Side Questions
+
+`/btw` forks the current Claude session to answer a quick question in parallel — without interrupting the main conversation. Useful for asking something while Claude is still working on a longer task.
+
+```
+/btw what's the capital of France?
+```
+
+## Group Chat
+
+In group chats, OpenClaude injects recent message history (with sender names and timestamps) into Claude's context, so Claude understands who said what. The chat history API is also available to Claude via a local HTTP endpoint for deeper queries.
 
 ## SOUL.md — Bot Personality
 
