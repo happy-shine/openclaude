@@ -203,7 +203,7 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /** Send a message with inline keyboard buttons */
-  async sendWithButtons(chatId: string, text: string, buttons: string[], replyToMessageId?: string): Promise<string> {
+  async sendWithButtons(chatId: string, text: string, buttons: (string | { text: string; data: string })[], replyToMessageId?: string): Promise<string> {
     const truncated = text.slice(0, 4096);
     const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
       ...(replyToMessageId
@@ -237,8 +237,12 @@ export class TelegramAdapter implements ChannelAdapter {
 }
 
 /** Build inline keyboard rows: ≤3 buttons → single row, >3 → one per row */
-function buildButtonRows(buttons: string[]): Array<Array<{ text: string; callback_data: string }>> {
-  const items = buttons.map((b) => ({ text: b, callback_data: b.slice(0, 64) }));
+function buildButtonRows(buttons: (string | { text: string; data: string })[]): Array<Array<{ text: string; callback_data: string }>> {
+  const items = buttons.map((b) =>
+    typeof b === "string"
+      ? { text: b, callback_data: b.slice(0, 64) }
+      : { text: b.text, callback_data: b.data.slice(0, 64) },
+  );
   if (items.length <= 3) return [items];
   return items.map((item) => [item]);
 }

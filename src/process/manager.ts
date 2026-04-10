@@ -211,6 +211,11 @@ export class ProcessManager {
     await new Promise<void>((resolve) => setTimeout(resolve, 2000));
   }
 
+  updateConfig(updates: Partial<ProcessManagerConfig>): void {
+    this.config = { ...this.config, ...updates };
+    this.log.info({ keys: Object.keys(updates) }, "Config updated (applies to new processes)");
+  }
+
   getRunningCount(): number {
     return this.processes.size;
   }

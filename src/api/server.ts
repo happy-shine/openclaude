@@ -13,6 +13,8 @@ export interface ApiServerConfig {
   messageStore?: MessageStore;
   /** Set of chat IDs allowed to query chat history (group chats only) */
   allowedChatIds?: Set<string>;
+  /** Callback to trigger config reload */
+  onReloadConfig?: () => { ok: boolean; changes: string[] };
 }
 
 export class ApiServer {
@@ -53,6 +55,8 @@ export class ApiServer {
         await this.handleSoul(req, res, url);
       } else if (req.method === "GET" && url.pathname === "/api/chat-history") {
         await this.handleChatHistory(res, url);
+      } else if (req.method === "POST" && url.pathname === "/api/reload-config") {
+        await this.handleReloadConfig(res);
       } else if (req.method === "GET" && url.pathname === "/api/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ status: "ok" }));
@@ -181,6 +185,21 @@ export class ApiServer {
 
     res.writeHead(405, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Method not allowed" }));
+  }
+
+  updateAllowedChatIds(ids: Set<string>): void {
+    this.config.allowedChatIds = ids;
+  }
+
+  private async handleReloadConfig(res: ServerResponse): Promise<void> {
+    if (!this.config.onReloadConfig) {
+      res.writeHead(501, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Reload not configured" }));
+      return;
+    }
+    const result = this.config.onReloadConfig();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(result));
   }
 
   /**

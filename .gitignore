@@ -19,3 +19,6 @@ Thumbs.db
 
 # Config with secrets (example is tracked)
 config.yaml
+
+# Local docs / scratch
+docs/

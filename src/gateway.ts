@@ -14,8 +14,9 @@ import { resolveDataDir } from "./config/loader.js";
 import { splitMessage } from "./channels/telegram/formatter.js";
 import { ApiServer } from "./api/server.js";
 import { ProgressTracker, getToolDetail } from "./progress.js";
-import { join } from "node:path";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, watch, type FSWatcher } from "node:fs";
+import { loadConfig } from "./config/loader.js";
 
 export class Gateway {
   private config: GatewayConfig;
@@ -34,11 +35,14 @@ export class Gateway {
   /** Per-chat promise chain: serializes messages within a chat, parallel across chats */
   private chatQueues = new Map<string, Promise<void>>();
   private messageStore: MessageStore;
+  private configPath: string;
+  private configWatcher?: FSWatcher;
 
-  constructor(config: GatewayConfig, log: Logger) {
+  constructor(config: GatewayConfig, log: Logger, configPath?: string) {
     this.config = config;
     this.log = log;
     this.dataDir = resolveDataDir(config);
+    this.configPath = configPath ?? join(this.dataDir, "config.yaml");
 
     const sessionStore = new SessionStore(join(this.dataDir, "sessions"));
     this.sessionManager = new SessionManager(sessionStore);
@@ -100,6 +104,75 @@ export class Gateway {
     const tmp = filePath + ".tmp";
     writeFileSync(tmp, JSON.stringify({ version: 1, allowFrom: [...this.allowFrom] }, null, 2));
     renameSync(tmp, filePath);
+  }
+
+  reloadConfig(): { ok: boolean; changes: string[] } {
+    try {
+      const newConfig = loadConfig(this.configPath);
+      const changes: string[] = [];
+
+      // Claude process config (applies to newly spawned processes)
+      const extraArgs = [...newConfig.claude.extraArgs];
+      if (newConfig.claude.model) extraArgs.push("--model", newConfig.claude.model);
+
+      if (newConfig.claude.model !== this.config.claude.model) {
+        changes.push(`model: ${this.config.claude.model ?? "default"} → ${newConfig.claude.model ?? "default"}`);
+      }
+      if (newConfig.claude.maxProcesses !== this.config.claude.maxProcesses) {
+        changes.push(`maxProcesses: ${this.config.claude.maxProcesses} → ${newConfig.claude.maxProcesses}`);
+      }
+      if (newConfig.claude.idleTimeoutMs !== this.config.claude.idleTimeoutMs) {
+        changes.push(`idleTimeoutMs: ${this.config.claude.idleTimeoutMs} → ${newConfig.claude.idleTimeoutMs}`);
+      }
+
+      this.processManager.updateConfig({
+        binary: newConfig.claude.binary,
+        idleTimeoutMs: newConfig.claude.idleTimeoutMs,
+        maxProcesses: newConfig.claude.maxProcesses,
+        extraArgs,
+      });
+
+      // Log level
+      if (newConfig.gateway.logLevel !== this.config.gateway.logLevel) {
+        changes.push(`logLevel: ${this.config.gateway.logLevel} → ${newConfig.gateway.logLevel}`);
+        this.log.level = newConfig.gateway.logLevel;
+      }
+
+      // Allowed chat IDs for history API
+      const tgConfig = newConfig.channels.telegram;
+      if (tgConfig) {
+        const newAllowedChatIds = new Set<string>(Object.keys(tgConfig.groups ?? {}));
+        this.apiServer?.updateAllowedChatIds(newAllowedChatIds);
+      }
+
+      // Refresh allowFrom from config + disk
+      this.config = newConfig;
+      this.allowFrom = this.loadAllowFrom();
+
+      if (changes.length === 0) changes.push("no changes detected");
+      this.log.info({ changes }, "Config reloaded");
+      return { ok: true, changes };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.error({ error: msg }, "Config reload failed");
+      return { ok: false, changes: [`error: ${msg}`] };
+    }
+  }
+
+  private setupConfigWatcher(): void {
+    let debounceTimer: NodeJS.Timeout | undefined;
+    try {
+      this.configWatcher = watch(this.configPath, () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          this.log.info("Config file changed, reloading...");
+          this.reloadConfig();
+        }, 500);
+      });
+      this.log.info({ path: this.configPath }, "Watching config for changes");
+    } catch (err) {
+      this.log.warn({ error: err instanceof Error ? err.message : String(err) }, "Failed to watch config file");
+    }
   }
 
   async start(): Promise<void> {
@@ -184,6 +257,53 @@ export class Gateway {
 
       onCallback("noop", async () => { /* do nothing */ });
 
+      onCallback("model", async (ctx) => {
+        const data = (ctx as any).callbackQuery?.data as string;
+        const value = data?.split(":")[1];
+        if (!value) return;
+        const chat = (ctx as any).callbackQuery?.message?.chat;
+        if (!chat) return;
+        const chatId = String(chat.id);
+        try {
+          const orig = (ctx as any).callbackQuery?.message;
+          if (orig && "text" in orig) {
+            await (ctx as any).editMessageText(`Model: ${value}`, { reply_markup: { inline_keyboard: [] } });
+          }
+        } catch { /* ignore */ }
+        const session = this.sessionManager.resolve(chatId, "telegram");
+        if (!this.processManager.hasProcess(session.sessionId)) {
+          await this.telegram!.send({ chatId, text: `Model set to ${value}. Will apply on next message.` });
+          return;
+        }
+        const sent = this.processManager.sendControl(session.sessionId, { subtype: "set_model", model: value });
+        await this.telegram!.send({ chatId, text: sent ? `Model switched to ${value}` : "No active process." });
+      });
+
+      onCallback("effort", async (ctx) => {
+        const data = (ctx as any).callbackQuery?.data as string;
+        const value = data?.split(":")[1];
+        if (!value) return;
+        const chat = (ctx as any).callbackQuery?.message?.chat;
+        if (!chat) return;
+        const chatId = String(chat.id);
+        try {
+          const orig = (ctx as any).callbackQuery?.message;
+          if (orig && "text" in orig) {
+            await (ctx as any).editMessageText(`Effort: ${value}`, { reply_markup: { inline_keyboard: [] } });
+          }
+        } catch { /* ignore */ }
+        const session = this.sessionManager.resolve(chatId, "telegram");
+        if (!this.processManager.hasProcess(session.sessionId)) {
+          await this.telegram!.send({ chatId, text: `Effort set to ${value}. Will apply on next message.` });
+          return;
+        }
+        const sent = this.processManager.sendControl(session.sessionId, {
+          subtype: "apply_flag_settings",
+          settings: { effortLevel: value },
+        });
+        await this.telegram!.send({ chatId, text: sent ? `Effort set to ${value}` : "No active process." });
+      });
+
       this.telegram.onMessage((msg) => this.enqueueChat(msg));
       await this.telegram.start();
       this.log.info("Telegram adapter started");
@@ -198,15 +318,18 @@ export class Gateway {
         log: this.log,
         messageStore: this.messageStore,
         allowedChatIds,
+        onReloadConfig: () => this.reloadConfig(),
       });
       await this.apiServer.start();
     }
 
+    this.setupConfigWatcher();
     this.log.info("Gateway started");
   }
 
   async stop(): Promise<void> {
     this.log.info("Stopping gateway...");
+    this.configWatcher?.close();
     await this.apiServer?.stop();
     await this.telegram?.stop();
     await this.processManager.shutdown();
@@ -667,9 +790,22 @@ export class Gateway {
     const access = this.checkMessageAccess(msg);
     if (!access.allowed) return;
 
-    const model = msg.text.trim();
-    if (!model) {
-      await this.telegram!.send({ chatId: msg.chatId, text: "Usage: /model <name>\nExamples: sonnet, opus, haiku, claude-sonnet-4-6" });
+    const input = msg.text.trim().toLowerCase();
+    const aliases: Record<string, string> = {
+      opus: "opus",
+      sonnet: "sonnet",
+      haiku: "haiku",
+      "claude-opus-4-6": "opus",
+      "claude-sonnet-4-6": "sonnet",
+      "claude-haiku-4-5": "haiku",
+    };
+    const model = aliases[input];
+    if (!input || !model) {
+      await this.telegram!.sendWithButtons(msg.chatId, "Select model:", [
+        { text: "opus", data: "model:opus" },
+        { text: "sonnet", data: "model:sonnet" },
+        { text: "haiku", data: "model:haiku" },
+      ]);
       return;
     }
 
@@ -693,7 +829,11 @@ export class Gateway {
     const level = msg.text.trim().toLowerCase();
     const valid = ["low", "medium", "high", "max"];
     if (!level || !valid.includes(level)) {
-      await this.telegram!.send({ chatId: msg.chatId, text: "Usage: /effort <level>\nLevels: low, medium, high, max" });
+      await this.telegram!.sendWithButtons(
+        msg.chatId,
+        "Select effort level:",
+        valid.map((v) => ({ text: v, data: `effort:${v}` })),
+      );
       return;
     }
 

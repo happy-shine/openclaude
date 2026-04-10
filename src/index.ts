@@ -166,7 +166,8 @@ gateway
     }
 
     // Foreground mode
-    const config = loadConfig(opts.config);
+    const configPath = opts.config ?? resolve(process.env.HOME ?? "~", ".openclaude", "config.yaml");
+    const config = loadConfig(configPath);
     if (opts.verbose) config.gateway.logLevel = "debug";
 
     const logDir = getLogDir(dataDir);
@@ -204,7 +205,7 @@ gateway
       JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
     );
 
-    const gateway = new Gateway(config, log);
+    const gateway = new Gateway(config, log, configPath);
 
     const shutdown = async (signal: string) => {
       log.info({ signal }, "Received signal, shutting down...");

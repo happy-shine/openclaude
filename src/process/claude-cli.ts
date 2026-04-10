@@ -48,18 +48,26 @@ export function sendControlRequest(proc: ChildProcess, request: Record<string, u
 
 export async function* readStreamEvents(proc: ChildProcess): AsyncGenerator<StreamEvent> {
   const rl = createInterface({ input: proc.stdout!, crlfDelay: Infinity });
-  for await (const line of rl) {
-    const event = parseStreamEvent(line);
-    if (event) yield event;
+  try {
+    for await (const line of rl) {
+      const event = parseStreamEvent(line);
+      if (event) yield event;
+    }
+  } finally {
+    rl.close();
   }
 }
 
 export async function* readUntilResult(proc: ChildProcess): AsyncGenerator<StreamEvent> {
   const rl = createInterface({ input: proc.stdout!, crlfDelay: Infinity });
-  for await (const line of rl) {
-    const event = parseStreamEvent(line);
-    if (!event) continue;
-    yield event;
-    if (event.type === "result") return;
+  try {
+    for await (const line of rl) {
+      const event = parseStreamEvent(line);
+      if (!event) continue;
+      yield event;
+      if (event.type === "result") return;
+    }
+  } finally {
+    rl.close();
   }
 }
