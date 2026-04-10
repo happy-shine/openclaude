@@ -7,7 +7,7 @@ import type { MessageStore } from "../sessions/message-store.js";
 
 export interface ApiServerConfig {
   port: number;
-  telegram: TelegramAdapter;
+  getBotTelegram: (botId: string) => TelegramAdapter | undefined;
   dataDir: string;
   log: Logger;
   messageStore?: MessageStore;
@@ -78,10 +78,18 @@ export class ApiServer {
   private async handleSendFile(_req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const chatId = url.searchParams.get("chat_id");
     const filePath = url.searchParams.get("file_path");
+    const botId = url.searchParams.get("bot_id");
 
     if (!chatId || !filePath) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Missing chat_id or file_path" }));
+      return;
+    }
+
+    const telegram = botId ? this.config.getBotTelegram(botId) : undefined;
+    if (!telegram) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing or unknown bot_id" }));
       return;
     }
 
@@ -92,9 +100,9 @@ export class ApiServer {
     const photoExts = ["jpg", "jpeg", "png", "gif", "webp"];
 
     if (photoExts.includes(ext)) {
-      await this.config.telegram.sendPhoto(chatId, filePath);
+      await telegram.sendPhoto(chatId, filePath);
     } else {
-      await this.config.telegram.sendDocument(chatId, filePath);
+      await telegram.sendDocument(chatId, filePath);
     }
 
     this.log.info({ chatId, filePath }, "Sent file to Telegram");
@@ -107,6 +115,7 @@ export class ApiServer {
    */
   private async handleSendMessage(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const chatId = url.searchParams.get("chat_id");
+    const botId = url.searchParams.get("bot_id");
     let text = url.searchParams.get("text");
 
     // Also accept JSON body
@@ -124,7 +133,14 @@ export class ApiServer {
       return;
     }
 
-    await this.config.telegram.send({ chatId, text });
+    const telegram = botId ? this.config.getBotTelegram(botId) : undefined;
+    if (!telegram) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing or unknown bot_id" }));
+      return;
+    }
+
+    await telegram.send({ chatId, text });
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true }));
   }

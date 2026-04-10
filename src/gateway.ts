@@ -307,7 +307,7 @@ export class Gateway {
       const allowedChatIds = new Set<string>(Object.keys(tgConfig.groups ?? {}));
       this.apiServer = new ApiServer({
         port: this.config.gateway.port,
-        telegram: this.telegram,
+        getBotTelegram: (botId) => botId === this.botId ? this.telegram : undefined,
         dataDir: this.dataDir,
         log: this.log,
         messageStore: this.messageStore,
