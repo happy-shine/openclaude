@@ -220,22 +220,20 @@ export class Gateway {
         const orig = (ctx as any).callbackQuery?.message;
         if (!orig) return;
         const messageId = String(orig.message_id);
-        // Rebuild session list for the requested page
-        const sessions = this.sessionManager.list(chatId);
+        // Rebuild session list for the requested page (newest first)
+        const sessions = this.sessionManager.list(chatId).reverse();
         const perPage = Gateway.SESSIONS_PER_PAGE;
         const totalPages = Math.ceil(sessions.length / perPage);
         const p = Math.max(0, Math.min(page, totalPages - 1));
         const slice = sessions.slice(p * perPage, (p + 1) * perPage);
-        const lines = slice.map((s, i) => {
-          const idx = p * perPage + i + 1;
+        const lines = slice.map((s) => {
           const active = s.isActive ? " << active" : "";
           const title = s.title ?? "(untitled)";
           const age = formatAge(Date.now() - s.lastActiveAt);
-          return `#${idx}  "${title}"  ${age}${active}`;
+          return `#${s.sessionNum}  "${title}"  ${age}${active}`;
         });
-        const sessionButtons = slice.map((_, i) => {
-          const idx = p * perPage + i + 1;
-          return { text: `${idx}`, callback_data: `sw:${chatId}:${idx}` };
+        const sessionButtons = slice.map((s) => {
+          return { text: `${s.sessionNum}`, callback_data: `sw:${chatId}:${s.sessionNum}` };
         });
         const buttonRows: Array<Array<{ text: string; callback_data: string }>> = [];
         for (let i = 0; i < sessionButtons.length; i += 5) {
@@ -715,7 +713,7 @@ export class Gateway {
     const access = this.checkMessageAccess(msg);
     if (!access.allowed) return;
 
-    const sessions = this.sessionManager.list(msg.chatId);
+    const sessions = this.sessionManager.list(msg.chatId).reverse();
     if (sessions.length === 0) {
       await this.telegram!.send({ chatId: msg.chatId, text: "No sessions yet." });
       return;
@@ -726,19 +724,17 @@ export class Gateway {
     const p = Math.max(0, Math.min(page, totalPages - 1));
     const slice = sessions.slice(p * perPage, (p + 1) * perPage);
 
-    const lines = slice.map((s, i) => {
-      const idx = p * perPage + i + 1;
+    const lines = slice.map((s) => {
       const active = s.isActive ? " << active" : "";
       const title = s.title ?? "(untitled)";
       const age = formatAge(Date.now() - s.lastActiveAt);
-      return `#${idx}  "${title}"  ${age}${active}`;
+      return `#${s.sessionNum}  "${title}"  ${age}${active}`;
     });
     const text = lines.join("\n");
 
     // Build inline keyboard: one row of session buttons, then nav row
-    const sessionButtons = slice.map((_, i) => {
-      const idx = p * perPage + i + 1;
-      return { text: `${idx}`, callback_data: `sw:${msg.chatId}:${idx}` };
+    const sessionButtons = slice.map((s) => {
+      return { text: `${s.sessionNum}`, callback_data: `sw:${msg.chatId}:${s.sessionNum}` };
     });
     // Split into rows of 5
     const buttonRows: Array<Array<{ text: string; callback_data: string }>> = [];
