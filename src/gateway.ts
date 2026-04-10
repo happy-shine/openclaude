@@ -36,6 +36,7 @@ export class Gateway {
   private messageStore: MessageStore;
   private configPath: string;
   private configWatcher?: FSWatcher;
+  private botId: string;
 
   constructor(config: GatewayConfig, log: Logger, configPath?: string) {
     this.config = config;
@@ -56,7 +57,7 @@ export class Gateway {
     }
 
     // Extract bot ID from token (part before the colon)
-    const botId = config.channels?.telegram?.botToken?.split(":")[0] ?? "default";
+    this.botId = config.channels?.telegram?.botToken?.split(":")[0] ?? "default";
 
     const workspaceDir = join(this.dataDir, "workspace");
     const agentsDir = join(this.dataDir, "agents");
@@ -70,7 +71,6 @@ export class Gateway {
         maxProcesses: config.claude.maxProcesses,
         extraArgs,
         workspaceDir,
-        botId,
         apiPort: config.gateway.port,
         agentsDir,
       },
@@ -405,7 +405,7 @@ export class Gateway {
 
     if (allAttachments.length > 0) {
       // Trigger acquire to create the workspace dir
-      this.processManager.acquire(session);
+      this.processManager.acquire(session, this.botId);
       const wsDir = this.processManager.getWorkspaceDir(session.sessionId);
       if (wsDir) {
         const downloadsDir = join(wsDir, "downloads");
@@ -435,7 +435,7 @@ export class Gateway {
     progress.start(); // auto-flush every 1.5s for spinner animation
 
     try {
-      for await (const event of this.processManager.sendMessage(session, messageText)) {
+      for await (const event of this.processManager.sendMessage(session, messageText, this.botId)) {
         // --- Session init ---
         if (event.type === "system" && event.subtype === "init" && event.session_id) {
           this.sessionManager.update(session.sessionId, {
@@ -593,7 +593,7 @@ export class Gateway {
     progress.start();
 
     try {
-      for await (const event of this.processManager.forkAndAsk(session, question)) {
+      for await (const event of this.processManager.forkAndAsk(session, question, this.botId)) {
         if (event.type === "stream_event" && event.event) {
           const raw = event.event as Record<string, unknown>;
           if (raw.type === "content_block_start") {
@@ -870,7 +870,7 @@ export class Gateway {
       progress.start();
       try {
         let generatedTitle = "";
-        for await (const event of this.processManager.sendMessage(session, messageText)) {
+        for await (const event of this.processManager.sendMessage(session, messageText, this.botId)) {
           if (event.type === "assistant" && event.message) {
             const content = event.message.content;
             if (Array.isArray(content)) {

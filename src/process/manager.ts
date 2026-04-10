@@ -16,7 +16,6 @@ export interface ProcessManagerConfig {
   maxProcesses: number;
   extraArgs: string[];
   workspaceDir: string;
-  botId: string;
   apiPort: number;
   agentsDir: string;
 }
@@ -31,7 +30,7 @@ export class ProcessManager {
     this.log = log.child({ module: "process-manager" });
   }
 
-  acquire(session: Session): ClaudeProcess {
+  acquire(session: Session, botId: string): ClaudeProcess {
     const existing = this.processes.get(session.sessionId);
     if (existing && !existing.process.killed) {
       this.resetIdleTimer(session.sessionId);
@@ -48,7 +47,7 @@ export class ProcessManager {
     const safeChatId = session.chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
     const sessionDir = join(
       this.config.workspaceDir,
-      this.config.botId,
+      botId,
       `${safeChatId}_${session.sessionId}`,
     );
     mkdirSync(sessionDir, { recursive: true });
@@ -57,7 +56,7 @@ export class ProcessManager {
     const parts: string[] = [];
 
     // Load SOUL.md if it exists for this bot
-    const soulPath = join(this.config.agentsDir, this.config.botId, "SOUL.md");
+    const soulPath = join(this.config.agentsDir, botId, "SOUL.md");
     if (existsSync(soulPath)) {
       try {
         const soul = readFileSync(soulPath, "utf-8").trim();
@@ -69,7 +68,7 @@ export class ProcessManager {
 
     // Built-in skills
     parts.push(getTelegramFileSkill(this.config.apiPort, session.chatId));
-    parts.push(getSoulEditorSkill(this.config.apiPort, this.config.botId));
+    parts.push(getSoulEditorSkill(this.config.apiPort, botId));
     parts.push(getButtonSkill());
     if (session.isGroup) {
       parts.push(getChatHistorySkill(this.config.apiPort, session.chatId));
@@ -115,8 +114,8 @@ export class ProcessManager {
     return cp;
   }
 
-  async *sendMessage(session: Session, text: string): AsyncGenerator<StreamEvent> {
-    let cp = this.acquire(session);
+  async *sendMessage(session: Session, text: string, botId: string): AsyncGenerator<StreamEvent> {
+    let cp = this.acquire(session, botId);
     cp.busy = true;
     cp.lastActiveAt = Date.now();
     this.clearIdleTimer(session.sessionId);
@@ -138,7 +137,7 @@ export class ProcessManager {
         session.claudeSessionId = undefined;
         this.processes.delete(session.sessionId);
 
-        cp = this.acquire(session);
+        cp = this.acquire(session, botId);
         cp.busy = true;
         this.clearIdleTimer(session.sessionId);
         sendUserMessage(cp.process, text);
@@ -282,12 +281,12 @@ export class ProcessManager {
    * Uses --resume + --fork-session to share prompt cache.
    * Returns an async generator of stream events (same as sendMessage).
    */
-  async *forkAndAsk(session: Session, question: string): AsyncGenerator<StreamEvent> {
+  async *forkAndAsk(session: Session, question: string, botId: string): AsyncGenerator<StreamEvent> {
     if (!session.claudeSessionId) return;
 
     // Must match the main process's cwd for --resume to find the session
     const safeChatId = session.chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const cwd = join(this.config.workspaceDir, this.config.botId, `${safeChatId}_${session.sessionId}`);
+    const cwd = join(this.config.workspaceDir, botId, `${safeChatId}_${session.sessionId}`);
     mkdirSync(cwd, { recursive: true });
 
     const args = [
