@@ -82,6 +82,7 @@ export function registerHandlers(
   messageHandler: MessageHandler | undefined,
   commandHandlers: Map<string, CommandHandler>,
   log: Logger,
+  adapterCallbackHandlers?: Map<string, (ctx: Context) => Promise<void>>,
 ): void {
   for (const [cmd, handler] of commandHandlers) {
     bot.command(cmd, (ctx) => {
@@ -170,8 +171,9 @@ export function registerHandlers(
     const data = ctx.callbackQuery.data;
     if (!data) return;
 
-    // Check for system callback handlers first (e.g. session switch, pagination)
-    const systemHandler = callbackHandlers.get(data.split(":")[0]);
+    // Check adapter-level callback handlers first (per-bot), then module-level fallback
+    const prefix = data.split(":")[0];
+    const systemHandler = adapterCallbackHandlers?.get(prefix) ?? callbackHandlers.get(prefix);
     if (systemHandler) {
       await ctx.answerCallbackQuery();
       await systemHandler(ctx);

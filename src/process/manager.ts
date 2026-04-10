@@ -30,7 +30,7 @@ export class ProcessManager {
     this.log = log.child({ module: "process-manager" });
   }
 
-  acquire(session: Session, botId: string): ClaudeProcess {
+  acquire(session: Session, botId: string, botExtraArgs?: string[]): ClaudeProcess {
     const existing = this.processes.get(session.sessionId);
     if (existing && !existing.process.killed) {
       this.resetIdleTimer(session.sessionId);
@@ -74,8 +74,10 @@ export class ProcessManager {
       parts.push(getChatHistorySkill(this.config.apiPort, session.chatId));
     }
 
+    // Use per-bot extraArgs if provided, otherwise fall back to config defaults
+    const baseArgs = botExtraArgs ?? this.config.extraArgs;
     const extraArgs = [
-      ...this.config.extraArgs,
+      ...baseArgs,
       "--append-system-prompt", parts.join("\n\n---\n\n"),
     ];
 
@@ -114,8 +116,8 @@ export class ProcessManager {
     return cp;
   }
 
-  async *sendMessage(session: Session, text: string, botId: string): AsyncGenerator<StreamEvent> {
-    let cp = this.acquire(session, botId);
+  async *sendMessage(session: Session, text: string, botId: string, botExtraArgs?: string[]): AsyncGenerator<StreamEvent> {
+    let cp = this.acquire(session, botId, botExtraArgs);
     cp.busy = true;
     cp.lastActiveAt = Date.now();
     this.clearIdleTimer(session.sessionId);
@@ -137,7 +139,7 @@ export class ProcessManager {
         session.claudeSessionId = undefined;
         this.processes.delete(session.sessionId);
 
-        cp = this.acquire(session, botId);
+        cp = this.acquire(session, botId, botExtraArgs);
         cp.busy = true;
         this.clearIdleTimer(session.sessionId);
         sendUserMessage(cp.process, text);

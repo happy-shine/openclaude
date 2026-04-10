@@ -1,4 +1,4 @@
-import { Bot } from "grammy";
+import { Bot, type Context } from "grammy";
 import type { Logger } from "pino";
 import type { ChannelAdapter, OutboundMessage, MessageHandler, CommandHandler } from "../types.js";
 import type { MessageStore } from "../../sessions/message-store.js";
@@ -16,6 +16,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private token: string;
   private messageHandler?: MessageHandler;
   private commandHandlers = new Map<string, CommandHandler>();
+  private callbackHandlers = new Map<string, (ctx: Context) => Promise<void>>();
   private stopped = false;
   private messageStore?: MessageStore;
   private botName: string;
@@ -60,8 +61,18 @@ export class TelegramAdapter implements ChannelAdapter {
     this.commandHandlers.set(command, handler);
   }
 
+  /** Register a callback handler for a given prefix (e.g. "sw", "pg", "model") */
+  onCallback(prefix: string, handler: (ctx: Context) => Promise<void>): void {
+    this.callbackHandlers.set(prefix, handler);
+  }
+
+  /** Look up a registered callback handler by prefix */
+  getCallbackHandler(prefix: string): ((ctx: Context) => Promise<void>) | undefined {
+    return this.callbackHandlers.get(prefix);
+  }
+
   async start(): Promise<void> {
-    registerHandlers(this.bot, this.messageHandler, this.commandHandlers, this.log);
+    registerHandlers(this.bot, this.messageHandler, this.commandHandlers, this.log, this.callbackHandlers);
 
     // Register commands with Telegram so they show in the menu
     const commands = [
@@ -100,7 +111,7 @@ export class TelegramAdapter implements ChannelAdapter {
         if (this.stopped) return;
         this.log.info("Recreating bot and restarting polling...");
         this.bot = createBot(this.token, this.log);
-        registerHandlers(this.bot, this.messageHandler, this.commandHandlers, this.log);
+        registerHandlers(this.bot, this.messageHandler, this.commandHandlers, this.log, this.callbackHandlers);
         this.startPollingWithRetry();
       }, 5000);
     });
