@@ -15,9 +15,35 @@ export interface GatewayConfig {
   auth: {
     defaultPolicy: "open" | "pairing" | "allowlist" | "disabled";
   };
-  channels: {
+  channels?: {
     telegram?: TelegramChannelConfig;
   };
+  bots?: BotConfig[];
+}
+
+export interface BotConfig {
+  name: string;
+  token: string;
+  model?: string;
+  extraArgs?: string[];
+  auth?: {
+    dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
+    groupPolicy?: "open" | "allowlist" | "disabled";
+    allowFrom?: string[];
+    groups?: Record<string, TelegramGroupConfig>;
+  };
+}
+
+export interface ResolvedBotConfig {
+  name: string;
+  token: string;
+  botId: string;
+  model?: string;
+  extraArgs: string[];
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  groupPolicy: "open" | "allowlist" | "disabled";
+  allowFrom: string[];
+  groups: Record<string, TelegramGroupConfig>;
 }
 
 export interface TelegramChannelConfig {

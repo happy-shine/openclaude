@@ -56,7 +56,7 @@ export class Gateway {
     }
 
     // Extract bot ID from token (part before the colon)
-    const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+    const botId = config.channels?.telegram?.botToken?.split(":")[0] ?? "default";
 
     const workspaceDir = join(this.dataDir, "workspace");
     const agentsDir = join(this.dataDir, "agents");
@@ -84,7 +84,7 @@ export class Gateway {
   }
 
   private loadAllowFrom(): Set<string> {
-    const configAllow = this.config.channels.telegram?.allowFrom ?? [];
+    const configAllow = this.config.channels?.telegram?.allowFrom ?? [];
     const filePath = join(this.dataDir, "credentials", "telegram-allowFrom.json");
     let fileAllow: string[] = [];
     if (existsSync(filePath)) {
@@ -138,7 +138,7 @@ export class Gateway {
       }
 
       // Allowed chat IDs for history API
-      const tgConfig = newConfig.channels.telegram;
+      const tgConfig = newConfig.channels?.telegram;
       if (tgConfig) {
         const newAllowedChatIds = new Set<string>(Object.keys(tgConfig.groups ?? {}));
         this.apiServer?.updateAllowedChatIds(newAllowedChatIds);
@@ -178,7 +178,7 @@ export class Gateway {
     this.log.info("Starting gateway...");
     this.sessionManager.loadAll();
 
-    const tgConfig = this.config.channels.telegram;
+    const tgConfig = this.config.channels?.telegram;
     if (tgConfig) {
       this.telegram = new TelegramAdapter(tgConfig.botToken, this.log);
       this.telegram.setMessageStore(this.messageStore);
@@ -335,7 +335,7 @@ export class Gateway {
     // Reload allowFrom from disk on every check so CLI-side approvals
     // are picked up by the running Gateway without a restart.
     this.allowFrom = this.loadAllowFrom();
-    const tgConfig = this.config.channels.telegram!;
+    const tgConfig = this.config.channels?.telegram!;
     return checkAccess({
       senderId: msg.senderId,
       chatId: msg.chatId,

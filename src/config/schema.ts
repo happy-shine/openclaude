@@ -36,9 +36,25 @@ const channelsSchema = z.object({
   telegram: telegramChannelSchema.optional(),
 });
 
+const botAuthSchema = z.object({
+  dmPolicy: z.enum(["open", "pairing", "allowlist", "disabled"]).optional(),
+  groupPolicy: z.enum(["open", "allowlist", "disabled"]).optional(),
+  allowFrom: z.array(z.string()).optional(),
+  groups: z.record(z.string(), telegramGroupSchema).optional(),
+});
+
+const botSchema = z.object({
+  name: z.string().min(1, "bot name is required"),
+  token: z.string().min(1, "bot token is required"),
+  model: z.string().optional(),
+  extraArgs: z.array(z.string()).optional(),
+  auth: botAuthSchema.optional(),
+});
+
 export const configSchema = z.object({
   gateway: gatewaySchema.default(gatewaySchema.parse({})),
   claude: claudeSchema.default(claudeSchema.parse({})),
   auth: authSchema.default(authSchema.parse({})),
-  channels: channelsSchema.default(channelsSchema.parse({})),
+  channels: channelsSchema.optional(),
+  bots: z.array(botSchema).optional(),
 });

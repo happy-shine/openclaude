@@ -34,7 +34,7 @@ channels:
 `;
     const cfg = parseConfig(yaml);
     expect(cfg.gateway.logLevel).toBe("info");
-    expect(cfg.channels.telegram.botToken).toBe("test-token");
+    expect(cfg.channels!.telegram.botToken).toBe("test-token");
     expect(cfg.auth.defaultPolicy).toBe("pairing");
   });
 
@@ -51,6 +51,6 @@ channels:
     const cfg = parseConfig(yaml);
     expect(cfg.gateway.logLevel).toBe("info");
     expect(cfg.claude.idleTimeoutMs).toBe(600000);
-    expect(cfg.channels.telegram.dmPolicy).toBe("pairing");
+    expect(cfg.channels!.telegram.dmPolicy).toBe("pairing");
   });
 });

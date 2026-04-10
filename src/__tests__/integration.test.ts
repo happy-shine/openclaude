@@ -18,14 +18,14 @@ channels:
 
   it("processes a message from allowed user through the full pipeline", () => {
     const config = parseConfig(configYaml);
-    expect(config.channels.telegram!.botToken).toBe("test-token");
+    expect(config.channels!.telegram!.botToken).toBe("test-token");
 
     const access = checkAccess({
       senderId: "111", chatId: "111", isGroup: false,
-      dmPolicy: config.channels.telegram!.dmPolicy,
-      groupPolicy: config.channels.telegram!.groupPolicy,
-      allowFrom: config.channels.telegram!.allowFrom,
-      groups: config.channels.telegram!.groups,
+      dmPolicy: config.channels!.telegram!.dmPolicy,
+      groupPolicy: config.channels!.telegram!.groupPolicy,
+      allowFrom: config.channels!.telegram!.allowFrom,
+      groups: config.channels!.telegram!.groups,
     });
     expect(access.allowed).toBe(true);
 
@@ -53,10 +53,10 @@ channels:
     const config = parseConfig(configYaml);
     const access = checkAccess({
       senderId: "999", chatId: "999", isGroup: false,
-      dmPolicy: config.channels.telegram!.dmPolicy,
-      groupPolicy: config.channels.telegram!.groupPolicy,
-      allowFrom: config.channels.telegram!.allowFrom,
-      groups: config.channels.telegram!.groups,
+      dmPolicy: config.channels!.telegram!.dmPolicy,
+      groupPolicy: config.channels!.telegram!.groupPolicy,
+      allowFrom: config.channels!.telegram!.allowFrom,
+      groups: config.channels!.telegram!.groups,
     });
     expect(access.allowed).toBe(false);
     expect(access.reason).toBe("needs_pairing");

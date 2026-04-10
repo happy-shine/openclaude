@@ -529,7 +529,7 @@ agent
   .action((opts: { config?: string }) => {
     const dataDir = getDataDir(opts.config);
     const config = loadConfig(opts.config);
-    const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+    const botId = config.channels?.telegram?.botToken?.split(":")[0] ?? "default";
     const soulPath = join(dataDir, "agents", botId, "SOUL.md");
     if (!existsSync(soulPath)) {
       console.log(`No SOUL.md found for bot ${botId}.`);
@@ -547,7 +547,7 @@ agent
   .action((opts: { config?: string }) => {
     const dataDir = getDataDir(opts.config);
     const config = loadConfig(opts.config);
-    const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+    const botId = config.channels?.telegram?.botToken?.split(":")[0] ?? "default";
     const agentDir = join(dataDir, "agents", botId);
     mkdirSync(agentDir, { recursive: true });
     const soulPath = join(agentDir, "SOUL.md");
@@ -573,7 +573,7 @@ agent
   .action((opts: { config?: string }) => {
     const dataDir = getDataDir(opts.config);
     const config = loadConfig(opts.config);
-    const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+    const botId = config.channels?.telegram?.botToken?.split(":")[0] ?? "default";
     const soulPath = join(dataDir, "agents", botId, "SOUL.md");
     if (!existsSync(soulPath)) {
       console.log("No SOUL.md to remove.");
@@ -590,7 +590,7 @@ agent
   .action((opts: { config?: string }) => {
     const dataDir = getDataDir(opts.config);
     const config = loadConfig(opts.config);
-    const botId = config.channels.telegram?.botToken?.split(":")[0] ?? "default";
+    const botId = config.channels?.telegram?.botToken?.split(":")[0] ?? "default";
     console.log(join(dataDir, "agents", botId, "SOUL.md"));
   });
 
