@@ -4,7 +4,7 @@ import type { ChannelAdapter, OutboundMessage, MessageHandler, CommandHandler } 
 import type { MessageStore } from "../../sessions/message-store.js";
 import { createBot } from "./bot.js";
 import { registerHandlers } from "./handlers.js";
-import { splitMessage } from "./formatter.js";
+import { splitMessage, markdownToHtml } from "./formatter.js";
 import { writeFileSync, mkdirSync, createReadStream } from "node:fs";
 import { join } from "node:path";
 import { InputFile } from "grammy";
@@ -119,7 +119,9 @@ export class TelegramAdapter implements ChannelAdapter {
     const chunks = splitMessage(msg.text);
     let lastMessageId = "";
     for (let i = 0; i < chunks.length; i++) {
-      const sent = await this.bot.api.sendMessage(Number(msg.chatId), chunks[i], {
+      const html = markdownToHtml(chunks[i]);
+      const sent = await this.bot.api.sendMessage(Number(msg.chatId), html, {
+        parse_mode: "HTML",
         ...(i === 0 && msg.replyToMessageId
           ? { reply_parameters: { message_id: Number(msg.replyToMessageId) } }
           : {}),
@@ -131,9 +133,10 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async editMessage(chatId: string, messageId: string, text: string, buttons?: string[]): Promise<void> {
-    const truncated = text.slice(0, 4096);
+    const truncated = markdownToHtml(text.slice(0, 4096));
     try {
       await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated, {
+        parse_mode: "HTML",
         ...(buttons && buttons.length > 0
           ? { reply_markup: { inline_keyboard: buildButtonRows(buttons) } }
           : {}),
@@ -183,8 +186,9 @@ export class TelegramAdapter implements ChannelAdapter {
 
   /** Send a message with a custom inline keyboard layout */
   async sendWithKeyboard(chatId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>): Promise<string> {
-    const truncated = text.slice(0, 4096);
+    const truncated = markdownToHtml(text.slice(0, 4096));
     const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
+      parse_mode: "HTML",
       reply_markup: { inline_keyboard: keyboard },
     });
     return String(sent.message_id);
@@ -192,9 +196,10 @@ export class TelegramAdapter implements ChannelAdapter {
 
   /** Edit a message's text and inline keyboard */
   async editMessageWithKeyboard(chatId: string, messageId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>): Promise<void> {
-    const truncated = text.slice(0, 4096);
+    const truncated = markdownToHtml(text.slice(0, 4096));
     try {
       await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated, {
+        parse_mode: "HTML",
         reply_markup: { inline_keyboard: keyboard },
       });
     } catch (err: unknown) {
@@ -204,8 +209,9 @@ export class TelegramAdapter implements ChannelAdapter {
 
   /** Send a message with inline keyboard buttons */
   async sendWithButtons(chatId: string, text: string, buttons: string[], replyToMessageId?: string): Promise<string> {
-    const truncated = text.slice(0, 4096);
+    const truncated = markdownToHtml(text.slice(0, 4096));
     const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
+      parse_mode: "HTML",
       ...(replyToMessageId
         ? { reply_parameters: { message_id: Number(replyToMessageId) } }
         : {}),
