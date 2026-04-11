@@ -34,6 +34,8 @@ export class BotInstance {
   private chatQueues = new Map<string, Promise<void>>();
   private gatewayConfig: GatewayConfig;
   private extraArgs: string[];
+  /** Other bots in the same gateway (for group @mention hints) */
+  private peerBots: Array<{ name: string; username: string }> = [];
 
   constructor(opts: {
     botConfig: ResolvedBotConfig;
@@ -288,6 +290,11 @@ export class BotInstance {
     this.log.info({ botName: this.name }, "Bot instance stopped");
   }
 
+  /** Set peer bots for group @mention hints */
+  setPeerBots(peers: Array<{ name: string; username: string }>): void {
+    this.peerBots = peers;
+  }
+
   /** Accept a relayed message from another bot in the same gateway */
   relayMessage(msg: InboundMessage): void {
     this.log.info({ from: msg.senderName, chatId: msg.chatId }, "Received relayed message");
@@ -348,6 +355,12 @@ export class BotInstance {
 
     // Build message with metadata (sender, time, reply context)
     let messageText = formatMessageWithMeta(msg, session.sessionId);
+
+    // Inject peer bot hints for group chats
+    if (msg.isGroup && this.peerBots.length > 0) {
+      const botList = this.peerBots.map(b => `@${b.username} (${b.name})`).join(", ");
+      messageText = `[Group bots available to @mention: ${botList}]\n\n${messageText}`;
+    }
 
     // Collect all attachments to download (current message + reply media)
     const allAttachments = [

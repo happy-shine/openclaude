@@ -235,6 +235,20 @@ export class Gateway {
     }
   }
 
+  /** Tell each bot about its peers so group messages include @mention hints */
+  private setupPeerBots(): void {
+    const allBots: Array<{ botId: string; name: string; username: string }> = [];
+    for (const bot of this.bots.values()) {
+      const username = bot.telegram.username;
+      if (username) {
+        allBots.push({ botId: bot.botId, name: bot.name, username });
+      }
+    }
+    for (const bot of this.bots.values()) {
+      bot.setPeerBots(allBots.filter(b => b.botId !== bot.botId));
+    }
+  }
+
   async start(): Promise<void> {
     this.log.info("Starting gateway...");
 
@@ -244,8 +258,9 @@ export class Gateway {
       this.log.info({ botId: bot.botId, botName: bot.name }, "Bot started");
     }
 
-    // Set up bot-to-bot relay after all bots have started (so usernames are populated)
+    // Set up bot-to-bot relay and peer bot hints after all bots have started
     this.setupBotRelay();
+    this.setupPeerBots();
 
     // Collect all group chat IDs from all bots for API server
     const allowedChatIds = new Set<string>();
