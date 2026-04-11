@@ -67,7 +67,7 @@ export class ProcessManager {
     }
 
     // Built-in skills
-    parts.push(getTelegramFileSkill(this.config.apiPort, session.chatId));
+    parts.push(getTelegramFileSkill(this.config.apiPort, session.chatId, botId, session.isGroup ?? false));
     parts.push(getSoulEditorSkill(this.config.apiPort, botId));
     parts.push(getButtonSkill());
     if (session.isGroup) {

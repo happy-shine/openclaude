@@ -55,6 +55,8 @@ export class ApiServer {
         await this.handleSoul(req, res, url);
       } else if (req.method === "GET" && url.pathname === "/api/chat-history") {
         await this.handleChatHistory(res, url);
+      } else if (req.method === "POST" && url.pathname === "/api/download-file") {
+        await this.handleDownloadFile(res, url);
       } else if (req.method === "POST" && url.pathname === "/api/reload-config") {
         await this.handleReloadConfig(res);
       } else if (req.method === "GET" && url.pathname === "/api/health") {
@@ -216,6 +218,41 @@ export class ApiServer {
     const result = await this.config.onReloadConfig();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(result));
+  }
+
+  /**
+   * POST /api/download-file?bot_id=xxx&file_id=xxx&dest_dir=/abs/path
+   *
+   * Downloads a Telegram file by file_id to the specified directory.
+   * Returns the local path to the downloaded file.
+   */
+  private async handleDownloadFile(res: ServerResponse, url: URL): Promise<void> {
+    const botId = url.searchParams.get("bot_id");
+    const fileId = url.searchParams.get("file_id");
+    const destDir = url.searchParams.get("dest_dir");
+
+    if (!botId || !fileId || !destDir) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing bot_id, file_id, or dest_dir" }));
+      return;
+    }
+
+    const telegram = this.config.getBotTelegram(botId);
+    if (!telegram) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: `Bot ${botId} not found` }));
+      return;
+    }
+
+    try {
+      mkdirSync(destDir, { recursive: true });
+      const localPath = await telegram.downloadFile(fileId, destDir);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, path: localPath }));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: `Download failed: ${err instanceof Error ? err.message : String(err)}` }));
+    }
   }
 
   /**
