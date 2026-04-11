@@ -1016,17 +1016,20 @@ function formatMessageWithMeta(msg: InboundMessage, sessionId?: string): string 
 function extractButtons(text: string): { text: string; buttons: string[] } {
   const lines = text.split("\n");
   const buttons: string[] = [];
-  let cutoff = lines.length;
+  const keepLines: string[] = [];
 
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].trim();
-    if (!line) continue; // skip trailing blank lines
+  for (const line of lines) {
     const found = [...line.matchAll(/<<([^>]+)>>/g)].map((m) => m[1]);
-    if (found.length === 0) break;
-    buttons.unshift(...found);
-    cutoff = i;
+    if (found.length > 0) {
+      buttons.push(...found);
+      // Remove the button markers from the line, keep any remaining text
+      const cleaned = line.replace(/<<[^>]+>>/g, "").trim();
+      if (cleaned) keepLines.push(cleaned);
+    } else {
+      keepLines.push(line);
+    }
   }
 
   if (buttons.length === 0) return { text, buttons: [] };
-  return { text: lines.slice(0, cutoff).join("\n").trimEnd(), buttons };
+  return { text: keepLines.join("\n").trimEnd(), buttons };
 }
