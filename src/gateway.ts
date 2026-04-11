@@ -183,6 +183,58 @@ export class Gateway {
     }
   }
 
+  /** Set up bot-to-bot relay: when a bot sends a message containing @another_bot, relay it */
+  private setupBotRelay(): void {
+    // Build username → BotInstance lookup
+    const botsByUsername = new Map<string, BotInstance>();
+    for (const bot of this.bots.values()) {
+      const username = bot.telegram.username;
+      if (username) {
+        botsByUsername.set(username.toLowerCase(), bot);
+      }
+    }
+
+    for (const sourceBot of this.bots.values()) {
+      sourceBot.telegram.onOutbound((chatId, text, messageId) => {
+        // Only relay in group chats
+        if (!chatId.startsWith("-")) return;
+
+        // Rebuild username map in case new bots started after initial setup
+        for (const b of this.bots.values()) {
+          const u = b.telegram.username;
+          if (u) botsByUsername.set(u.toLowerCase(), b);
+        }
+
+        // Check for @mentions of other bots
+        for (const [username, targetBot] of botsByUsername) {
+          if (targetBot.botId === sourceBot.botId) continue;
+          if (!text.includes(`@${username}`)) continue;
+
+          // Strip the @mention from text for the target bot
+          const cleanText = text.replace(new RegExp(`@${username}`, "gi"), "").trim();
+          if (!cleanText) continue;
+
+          this.log.info(
+            { from: sourceBot.name, to: targetBot.name, chatId },
+            "Relaying bot-to-bot message",
+          );
+
+          targetBot.relayMessage({
+            channelType: "telegram",
+            chatId,
+            senderId: sourceBot.botId,
+            senderName: sourceBot.name,
+            messageId,
+            text: cleanText,
+            isGroup: true,
+            timestamp: Math.floor(Date.now() / 1000),
+            raw: { relayedFrom: sourceBot.botId },
+          });
+        }
+      });
+    }
+  }
+
   async start(): Promise<void> {
     this.log.info("Starting gateway...");
 
@@ -191,6 +243,9 @@ export class Gateway {
       await bot.start();
       this.log.info({ botId: bot.botId, botName: bot.name }, "Bot started");
     }
+
+    // Set up bot-to-bot relay after all bots have started (so usernames are populated)
+    this.setupBotRelay();
 
     // Collect all group chat IDs from all bots for API server
     const allowedChatIds = new Set<string>();

@@ -20,6 +20,9 @@ export class TelegramAdapter implements ChannelAdapter {
   private stopped = false;
   private messageStore?: MessageStore;
   private botName: string;
+  private outboundCallback?: (chatId: string, text: string, messageId: string) => void;
+  /** Bot username (e.g. "atri65535_bot"), populated after start() */
+  username?: string;
 
   constructor(token: string, log: Logger) {
     this.token = token;
@@ -55,6 +58,11 @@ export class TelegramAdapter implements ChannelAdapter {
 
   onMessage(handler: MessageHandler): void {
     this.messageHandler = handler;
+  }
+
+  /** Register a callback for outbound messages (used by gateway for bot-to-bot relay) */
+  onOutbound(cb: (chatId: string, text: string, messageId: string) => void): void {
+    this.outboundCallback = cb;
   }
 
   onCommand(command: string, handler: CommandHandler): void {
@@ -100,6 +108,7 @@ export class TelegramAdapter implements ChannelAdapter {
     this.bot.start({
       drop_pending_updates: true,
       onStart: (info) => {
+        this.username = info.username;
         this.log.info({ username: info.username }, "Telegram bot started polling");
       },
     }).catch((err) => {
@@ -135,6 +144,7 @@ export class TelegramAdapter implements ChannelAdapter {
       lastMessageId = String(sent.message_id);
       this.recordOutbound(msg.chatId, String(sent.message_id), chunks[i]);
     }
+    this.outboundCallback?.(msg.chatId, msg.text, lastMessageId);
     return lastMessageId;
   }
 
@@ -147,6 +157,7 @@ export class TelegramAdapter implements ChannelAdapter {
           : {}),
       });
       this.recordOutbound(chatId, messageId, truncated);
+      this.outboundCallback?.(chatId, truncated, messageId);
     } catch (err: unknown) {
       if (err instanceof Error && !err.message?.includes("message is not modified")) throw err;
     }

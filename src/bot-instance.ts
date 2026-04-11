@@ -288,6 +288,12 @@ export class BotInstance {
     this.log.info({ botName: this.name }, "Bot instance stopped");
   }
 
+  /** Accept a relayed message from another bot in the same gateway */
+  relayMessage(msg: InboundMessage): void {
+    this.log.info({ from: msg.senderName, chatId: msg.chatId }, "Received relayed message");
+    this.enqueueChat(msg);
+  }
+
   // --- Chat queue ---
 
   private async enqueueChat(msg: InboundMessage): Promise<void> {
