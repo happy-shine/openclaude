@@ -360,7 +360,7 @@ export class BotInstance {
     // Inject peer bot hints for group chats
     if (msg.isGroup && this.peerBots.length > 0) {
       const botList = this.peerBots.map(b => `@${b.username} (${b.name})`).join(", ");
-      messageText = `[Group bots: ${botList} — Do NOT @mention other bots unless the user explicitly asks for bot-to-bot discussion. Mentioning another bot will trigger them to respond, so only do it when instructed.]\n\n${messageText}`;
+      messageText = `[本群可@的bot: ${botList} — 注意: 只有以上列出的bot可以被@到，@其他任何bot都无效（消息不会送达）。除非用户明确要求bot间交流，否则不要主动@其他bot。]\n\n${messageText}`;
     }
 
     // Collect all attachments to download (current message + reply media)
