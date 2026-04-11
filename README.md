@@ -13,16 +13,19 @@ Each conversation spawns a real Claude Code process. Claude can read/write files
 ## Features
 
 - **Claude Code as engine** — not an API wrapper. Each session is a full Claude Code subprocess with tool use, file I/O, and bash access
+- **Multi-bot support** — run multiple bots on a single gateway, each with independent config, personality, and access control
+- **Bot-to-bot relay** — bots can @mention each other in group chats; the gateway routes messages internally without relying on Telegram's bot-to-bot delivery
 - **Session management** — `/new`, `/sessions` with inline buttons. Multiple sessions per chat, each with its own workspace
 - **`/btw` side questions** — ask a non-blocking question in parallel without interrupting the current session
 - **Rich commands** — `/model`, `/effort`, `/stop` for live session control
 - **Inline buttons** — session picker and choices rendered as tappable Telegram buttons; stale buttons auto-removed
-- **Access control** — allowlist + pairing code flow. No strangers can use your bot
-- **Group chat support** — responds to @mentions and replies; message history with sender/timestamp context injected into Claude
-- **File sharing** — upload files to Claude, Claude sends files back to you; reply attachments forwarded
+- **Access control** — allowlist + pairing code flow for both DMs and groups. No strangers can use your bot
+- **Group chat support** — responds to @mentions and replies; full message history (including bot replies) with sender/timestamp context injected into Claude
+- **File sharing** — upload files to Claude, Claude sends files back to you; reply attachments forwarded. Claude can also retrieve previously shared files via chat history
 - **SOUL.md personality** — customize your bot's personality per-bot. Claude can even edit its own SOUL via user instructions
 - **Live progress** — pulsing status indicator shows what Claude is doing (thinking, reading, writing, running commands)
 - **Daemon mode** — runs in background with log persistence, auto-restart on crash
+- **Hot-reload** — config changes (including adding/removing bots) are picked up without restart
 
 ## Prerequisites
 
@@ -52,11 +55,12 @@ cp config.example.yaml ~/.openclaude/config.yaml
 Edit `~/.openclaude/config.yaml` and set your bot token:
 
 ```yaml
-channels:
-  telegram:
-    botToken: "123456:ABC-DEF..."   # from @BotFather
-    dmPolicy: "pairing"             # pairing | open | allowlist | disabled
-    groupPolicy: "disabled"         # disabled | open | allowlist
+bots:
+  - name: "mybot"
+    token: "123456:ABC-DEF..."   # from @BotFather
+    auth:
+      dmPolicy: "pairing"       # pairing | open | allowlist | disabled
+      groupPolicy: "pairing"    # pairing | open | allowlist | disabled
 ```
 
 **2. Start the gateway**
@@ -94,15 +98,24 @@ claude:
   maxProcesses: 10            # max concurrent Claude processes
   extraArgs: []               # additional CLI flags
 
-channels:
-  telegram:
-    botToken: "${TELEGRAM_BOT_TOKEN}"  # supports env var expansion
-    dmPolicy: "pairing"       # DM access policy
-    groupPolicy: "disabled"   # group access policy
-    allowFrom: []             # pre-approved Telegram user IDs
-    groups:                   # per-group config
-      "-1001234567890":
-        enabled: true
+auth:
+  defaultPolicy: "pairing"    # default policy for new bots
+
+bots:
+  - name: "assistant"
+    token: "${TELEGRAM_BOT_TOKEN}"  # supports env var expansion
+    auth:
+      dmPolicy: "pairing"          # DM access policy
+      groupPolicy: "pairing"       # group access policy
+      allowFrom: []                # pre-approved Telegram user IDs
+      groups:                      # per-group config
+        "-1001234567890":
+          enabled: true
+  - name: "helper"
+    token: "another-bot-token"
+    auth:
+      dmPolicy: "pairing"
+      groupPolicy: "disabled"
 ```
 
 ### Access Policies
@@ -110,7 +123,7 @@ channels:
 | Policy | Behavior |
 |--------|----------|
 | `open` | Anyone can use the bot |
-| `pairing` | New users get a pairing code, owner approves via CLI |
+| `pairing` | New users/groups get a pairing code, owner approves via CLI |
 | `allowlist` | Only pre-approved user IDs |
 | `disabled` | Channel disabled |
 
@@ -126,18 +139,30 @@ openclaude gateway restart          Restart the gateway
 openclaude gateway status           Check if gateway is running
 openclaude gateway logs [-f] [-n 50] Tail gateway logs
 
+openclaude bot list                 List all configured bots
+openclaude bot add <token> [--name] Add a bot (auto-detects username via Telegram API)
+openclaude bot remove <name>        Remove a bot from config
+
 openclaude pairing list             List pending pairing requests
-openclaude pairing approve <code>   Approve a pairing code
+openclaude pairing approve <code>   Approve a pairing code (auto-detects which bot)
+
+openclaude group list               List configured groups
+openclaude group add <chatId>       Add a group to allowlist
+openclaude group remove <chatId>    Remove a group
+openclaude group approve <code>     Approve a group pairing code
+openclaude group disable <chatId>   Disable a group without removing
 
 openclaude allow list [channel]     List allowed users
 openclaude allow add <ch> <id>      Add user to allowlist
 openclaude allow remove <ch> <id>   Remove user from allowlist
 
-openclaude agent show               Show current SOUL.md
-openclaude agent edit               Edit SOUL.md in $EDITOR
-openclaude agent reset              Delete SOUL.md (reset personality)
-openclaude agent path               Print SOUL.md file path
+openclaude bot soul show            Show current SOUL.md
+openclaude bot soul edit            Edit SOUL.md in $EDITOR
+openclaude bot soul reset           Delete SOUL.md (reset personality)
+openclaude bot soul path            Print SOUL.md file path
 ```
+
+All `pairing`, `group`, `allow`, and `bot soul` commands support `--bot <name>` to target a specific bot. When only one bot is configured, the flag is optional.
 
 ## Telegram Commands
 
@@ -161,16 +186,36 @@ In groups, the bot responds when **@mentioned** or **replied to**.
 /btw what's the capital of France?
 ```
 
+## Multi-Bot
+
+Run multiple bots on a single gateway. Each bot has its own personality, access control, and session state, but they share the same Claude process pool.
+
+```bash
+openclaude bot add 123456:ABC-DEF      # auto-detects name from Telegram
+openclaude bot add 789012:GHI-JKL --name helper
+openclaude bot list
+```
+
+Adding or removing bots triggers a hot-reload — no gateway restart needed.
+
+### Bot-to-Bot Relay
+
+In group chats, when one bot's reply contains `@another_bot`, the gateway automatically relays the message internally. This works even though Telegram doesn't deliver bot-to-bot messages natively.
+
+Each bot knows which other bots are in the gateway and will only @mention them when the user explicitly asks for bot-to-bot interaction.
+
 ## Group Chat
 
-In group chats, OpenClaude injects recent message history (with sender names and timestamps) into Claude's context, so Claude understands who said what. The chat history API is also available to Claude via a local HTTP endpoint for deeper queries.
+In group chats, OpenClaude records all messages (including bot replies) to a persistent chat history. Claude can query this history via a local HTTP endpoint for context about past conversations.
+
+Groups can be authorized via pairing (bot sends a code, owner approves) or pre-configured in `config.yaml`.
 
 ## SOUL.md — Bot Personality
 
 Customize your bot's personality by creating a `SOUL.md` file:
 
 ```bash
-openclaude agent edit
+openclaude bot soul edit
 ```
 
 Or let Claude edit it — tell your bot "from now on, speak like a pirate" and it will update its own SOUL.md.
@@ -183,12 +228,15 @@ Changes take effect on the next `/new` session.
 ┌──────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │   Telegram   │────→│  OpenClaude GW   │────→│  Claude Code    │
 │   (grammY)   │←────│                  │←────│  CLI Process    │
-└──────────────┘     │  - Session Mgr   │     │  (subprocess)   │
-                     │  - Process Pool  │     │  - Tool use     │
-                     │  - Access Ctrl   │     │  - File I/O     │
-                     │  - Progress UI   │     │  - Bash access  │
-                     │  - HTTP API      │     │  - Web search   │
-                     └──────────────────┘     └─────────────────┘
+└──────────────┘     │  - Multi-bot     │     │  (subprocess)   │
+                     │  - Bot Relay     │     │  - Tool use     │
+                     │  - Session Mgr   │     │  - File I/O     │
+                     │  - Process Pool  │     │  - Bash access  │
+                     │  - Access Ctrl   │     │  - Web search   │
+                     │  - Progress UI   │     └─────────────────┘
+                     │  - HTTP API      │
+                     │  - Chat History  │
+                     └──────────────────┘
 ```
 
 **Data directory** (`~/.openclaude/`):
@@ -198,7 +246,8 @@ Changes take effect on the next `/new` session.
 ├── config.yaml              # configuration
 ├── logs/gateway.log         # daemon logs
 ├── sessions/                # session state per chat
-├── credentials/             # allowlists, pairing data
+├── credentials/             # allowlists, pairing data, runtime groups
+├── messages/                # persistent group chat history (JSONL)
 ├── workspace/{botId}/       # per-session working directories
 │   └── {chatId}_{sessionId}/
 └── agents/{botId}/          # per-bot personality
