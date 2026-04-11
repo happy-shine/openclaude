@@ -146,6 +146,7 @@ export class TelegramAdapter implements ChannelAdapter {
           ? { reply_markup: { inline_keyboard: buildButtonRows(buttons) } }
           : {}),
       });
+      this.recordOutbound(chatId, messageId, truncated);
     } catch (err: unknown) {
       if (err instanceof Error && !err.message?.includes("message is not modified")) throw err;
     }
