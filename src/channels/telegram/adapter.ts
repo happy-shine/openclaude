@@ -4,7 +4,7 @@ import type { ChannelAdapter, OutboundMessage, MessageHandler, CommandHandler } 
 import type { MessageStore } from "../../sessions/message-store.js";
 import { createBot } from "./bot.js";
 import { registerHandlers } from "./handlers.js";
-import { splitMessage } from "./formatter.js";
+import { splitMessage, toMarkdownV2, truncateV2 } from "./formatter.js";
 import { writeFileSync, mkdirSync, createReadStream } from "node:fs";
 import { join } from "node:path";
 import { InputFile } from "grammy";
@@ -171,14 +171,16 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async send(msg: OutboundMessage): Promise<string> {
-    const chunks = splitMessage(msg.text);
+    const mdv2 = toMarkdownV2(msg.text);
+    const chunks = splitMessage(mdv2);
     let lastMessageId = "";
     for (let i = 0; i < chunks.length; i++) {
-      const sent = await this.bot.api.sendMessage(Number(msg.chatId), chunks[i], {
-        ...(i === 0 && msg.replyToMessageId
-          ? { reply_parameters: { message_id: Number(msg.replyToMessageId) } }
-          : {}),
-      });
+      const replyOpts = i === 0 && msg.replyToMessageId
+        ? { reply_parameters: { message_id: Number(msg.replyToMessageId) } }
+        : {};
+      const sent = await this.sendTextWithFallback(
+        Number(msg.chatId), chunks[i], msg.text, replyOpts,
+      );
       lastMessageId = String(sent.message_id);
       this.recordOutbound(msg.chatId, String(sent.message_id), chunks[i]);
     }
@@ -187,17 +189,51 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async editMessage(chatId: string, messageId: string, text: string, buttons?: string[]): Promise<void> {
-    const truncated = text.slice(0, 4096);
+    const mdv2 = truncateV2(toMarkdownV2(text));
+    const btnOpts = buttons && buttons.length > 0
+      ? { reply_markup: { inline_keyboard: buildButtonRows(buttons) } }
+      : {};
     try {
-      await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated, {
-        ...(buttons && buttons.length > 0
-          ? { reply_markup: { inline_keyboard: buildButtonRows(buttons) } }
-          : {}),
+      await this.bot.api.editMessageText(Number(chatId), Number(messageId), mdv2, {
+        parse_mode: "MarkdownV2",
+        ...btnOpts,
       });
-      this.recordOutbound(chatId, messageId, truncated);
-      // Don't trigger relay on editMessage — only on send()
+      this.recordOutbound(chatId, messageId, mdv2);
     } catch (err: unknown) {
-      if (err instanceof Error && !err.message?.includes("message is not modified")) throw err;
+      if (err instanceof Error && err.message?.includes("message is not modified")) return;
+      // Fallback: retry as plain text on parse error
+      if (err instanceof Error && err.message?.includes("can't parse entities")) {
+        this.log.warn("MarkdownV2 parse failed in editMessage, falling back to plain text");
+        const plain = text.slice(0, 4096);
+        try {
+          await this.bot.api.editMessageText(Number(chatId), Number(messageId), plain, btnOpts);
+          this.recordOutbound(chatId, messageId, plain);
+        } catch (e2: unknown) {
+          if (e2 instanceof Error && !e2.message?.includes("message is not modified")) throw e2;
+        }
+        return;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Send a message with MarkdownV2 parse mode. On parse error, retry as plain text.
+   */
+  private async sendTextWithFallback(
+    chatId: number, mdv2Text: string, plainText: string, opts: Record<string, unknown> = {},
+  ) {
+    try {
+      return await this.bot.api.sendMessage(chatId, mdv2Text, {
+        parse_mode: "MarkdownV2",
+        ...opts,
+      });
+    } catch (err) {
+      if (err instanceof Error && err.message?.includes("can't parse entities")) {
+        this.log.warn("MarkdownV2 parse failed, falling back to plain text");
+        return await this.bot.api.sendMessage(chatId, plainText.slice(0, 4096), opts);
+      }
+      throw err;
     }
   }
 
@@ -243,35 +279,50 @@ export class TelegramAdapter implements ChannelAdapter {
 
   /** Send a message with a custom inline keyboard layout */
   async sendWithKeyboard(chatId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>): Promise<string> {
-    const truncated = text.slice(0, 4096);
-    const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
-      reply_markup: { inline_keyboard: keyboard },
-    });
+    const mdv2 = truncateV2(toMarkdownV2(text));
+    const sent = await this.sendTextWithFallback(
+      Number(chatId), mdv2, text, { reply_markup: { inline_keyboard: keyboard } },
+    );
     return String(sent.message_id);
   }
 
   /** Edit a message's text and inline keyboard */
   async editMessageWithKeyboard(chatId: string, messageId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>): Promise<void> {
-    const truncated = text.slice(0, 4096);
+    const mdv2 = truncateV2(toMarkdownV2(text));
     try {
-      await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated, {
+      await this.bot.api.editMessageText(Number(chatId), Number(messageId), mdv2, {
+        parse_mode: "MarkdownV2",
         reply_markup: { inline_keyboard: keyboard },
       });
     } catch (err: unknown) {
-      if (err instanceof Error && !err.message?.includes("message is not modified")) throw err;
+      if (err instanceof Error && err.message?.includes("message is not modified")) return;
+      if (err instanceof Error && err.message?.includes("can't parse entities")) {
+        this.log.warn("MarkdownV2 parse failed in editMessageWithKeyboard, falling back");
+        const plain = text.slice(0, 4096);
+        try {
+          await this.bot.api.editMessageText(Number(chatId), Number(messageId), plain, {
+            reply_markup: { inline_keyboard: keyboard },
+          });
+        } catch (e2: unknown) {
+          if (e2 instanceof Error && !e2.message?.includes("message is not modified")) throw e2;
+        }
+        return;
+      }
+      throw err;
     }
   }
 
   /** Send a message with inline keyboard buttons */
   async sendWithButtons(chatId: string, text: string, buttons: (string | { text: string; data: string })[], replyToMessageId?: string): Promise<string> {
-    const truncated = text.slice(0, 4096);
-    const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
+    const mdv2 = truncateV2(toMarkdownV2(text));
+    const opts = {
       ...(replyToMessageId
         ? { reply_parameters: { message_id: Number(replyToMessageId) } }
         : {}),
       reply_markup: { inline_keyboard: buildButtonRows(buttons) },
-    });
-    this.recordOutbound(chatId, String(sent.message_id), truncated);
+    };
+    const sent = await this.sendTextWithFallback(Number(chatId), mdv2, text, opts);
+    this.recordOutbound(chatId, String(sent.message_id), mdv2);
     return String(sent.message_id);
   }
 
