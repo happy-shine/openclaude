@@ -17,6 +17,7 @@ import {
   renameSync,
 } from "node:fs";
 import { resolve, join } from "node:path";
+import { parseDocument } from "yaml";
 
 const program = new Command();
 
@@ -455,34 +456,230 @@ pairing
   .description("Approve a pairing code")
   .argument("<code>", "Pairing code to approve")
   .option("-c, --config <path>", "Path to config file")
+  .option("--bot <name>", "Bot name (auto-detected if omitted)")
+  .action((code: string, opts: { config?: string; bot?: string }) => {
+    const dataDir = getDataDir(opts.config);
+    const config = loadConfig(opts.config);
+    const bots = resolveBots(config);
+
+    // Search across all bots (or specified bot) for the pairing code
+    const searchBots = opts.bot
+      ? [{ botId: resolveBotId(config, opts.bot).botId, name: resolveBotId(config, opts.bot).name }]
+      : bots.map(b => ({ botId: b.botId, name: b.name }));
+
+    for (const { botId, name } of searchBots) {
+      const pairingPath = join(dataDir, "credentials", botId, "telegram-pairing.json");
+      if (!existsSync(pairingPath)) continue;
+      const pm = new PairingManager(pairingPath);
+      const result = pm.approve(code);
+      if (!result) continue;
+
+      const allowPath = join(dataDir, "credentials", botId, "telegram-allowFrom.json");
+      let allowFrom: string[] = [];
+      if (existsSync(allowPath)) {
+        try {
+          allowFrom = JSON.parse(readFileSync(allowPath, "utf-8")).allowFrom ?? [];
+        } catch {}
+      }
+      if (!allowFrom.includes(result.senderId)) {
+        allowFrom.push(result.senderId);
+        mkdirSync(join(dataDir, "credentials", botId), { recursive: true });
+        const tmp = allowPath + ".tmp";
+        writeFileSync(tmp, JSON.stringify({ version: 1, allowFrom }, null, 2));
+        renameSync(tmp, allowPath);
+      }
+      console.log(`Approved sender ${result.senderId} for bot ${name}. They can now use the bot.`);
+      return;
+    }
+    console.error(`No pending request with code "${code}" found across any bot.`);
+    process.exit(1);
+  });
+
+// --- group ---
+const group = program.command("group").description("Manage group access");
+
+group
+  .command("list")
+  .description("List all configured groups")
+  .option("-c, --config <path>", "Path to config file")
   .option("--bot <name>", "Bot name")
-  .option("--notify", "Send approval notification to user")
+  .action((opts: { config?: string; bot?: string }) => {
+    const dataDir = getDataDir(opts.config);
+    const config = loadConfig(opts.config);
+    const { botId, name } = resolveBotId(config, opts.bot);
+    const bots = resolveBots(config);
+    const botConfig = bots.find(b => b.botId === botId);
+
+    // Config groups
+    const configGroups = botConfig?.groups ?? {};
+
+    // Runtime groups
+    const groupsPath = join(dataDir, "credentials", botId, "telegram-groups.json");
+    let runtimeGroups: Record<string, { enabled: boolean; allowFrom?: string[] }> = {};
+    if (existsSync(groupsPath)) {
+      try {
+        runtimeGroups = JSON.parse(readFileSync(groupsPath, "utf-8")).groups ?? {};
+      } catch {}
+    }
+
+    // Merge
+    const allIds = new Set([...Object.keys(configGroups), ...Object.keys(runtimeGroups)]);
+    if (allIds.size === 0) {
+      console.log(`No groups configured for bot ${name}.`);
+      console.log(`\nGroup policy: ${botConfig?.groupPolicy ?? "disabled"}`);
+      return;
+    }
+
+    console.log(`Groups for bot ${name} (policy: ${botConfig?.groupPolicy ?? "disabled"}):\n`);
+    console.log("Chat ID              Enabled  Source    AllowFrom");
+    console.log("-------------------  -------  --------  ---------");
+    for (const id of allIds) {
+      const cg = configGroups[id];
+      const rg = runtimeGroups[id];
+      const source = cg && rg ? "both" : cg ? "config" : "runtime";
+      const effective = rg ?? cg;
+      const enabled = effective?.enabled ? "yes" : "no";
+      const allowFrom = effective?.allowFrom?.join(", ") || "(all)";
+      console.log(`${id.padEnd(19)}  ${enabled.padEnd(7)}  ${source.padEnd(8)}  ${allowFrom}`);
+    }
+  });
+
+group
+  .command("add")
+  .description("Add a group to the allowlist")
+  .argument("<chatId>", "Group chat ID (negative number)")
+  .option("-c, --config <path>", "Path to config file")
+  .option("--bot <name>", "Bot name")
+  .action((chatId: string, opts: { config?: string; bot?: string }) => {
+    const dataDir = getDataDir(opts.config);
+    const config = loadConfig(opts.config);
+    const { botId } = resolveBotId(config, opts.bot);
+    const groupsPath = join(dataDir, "credentials", botId, "telegram-groups.json");
+
+    let groups: Record<string, { enabled: boolean; allowFrom?: string[] }> = {};
+    if (existsSync(groupsPath)) {
+      try {
+        groups = JSON.parse(readFileSync(groupsPath, "utf-8")).groups ?? {};
+      } catch {}
+    }
+
+    if (groups[chatId]?.enabled) {
+      console.log(`Group ${chatId} is already enabled.`);
+      return;
+    }
+
+    groups[chatId] = { enabled: true };
+    mkdirSync(join(dataDir, "credentials", botId), { recursive: true });
+    const tmp = groupsPath + ".tmp";
+    writeFileSync(tmp, JSON.stringify({ version: 1, groups }, null, 2));
+    renameSync(tmp, groupsPath);
+    console.log(`Group ${chatId} added and enabled. No restart needed.`);
+  });
+
+group
+  .command("remove")
+  .description("Remove a group from the runtime allowlist")
+  .argument("<chatId>", "Group chat ID")
+  .option("-c, --config <path>", "Path to config file")
+  .option("--bot <name>", "Bot name")
+  .action((chatId: string, opts: { config?: string; bot?: string }) => {
+    const dataDir = getDataDir(opts.config);
+    const config = loadConfig(opts.config);
+    const { botId } = resolveBotId(config, opts.bot);
+    const groupsPath = join(dataDir, "credentials", botId, "telegram-groups.json");
+
+    if (!existsSync(groupsPath)) {
+      console.log(`Group ${chatId} not found in runtime groups.`);
+      return;
+    }
+
+    let groups: Record<string, { enabled: boolean; allowFrom?: string[] }> = {};
+    try {
+      groups = JSON.parse(readFileSync(groupsPath, "utf-8")).groups ?? {};
+    } catch {}
+
+    if (!(chatId in groups)) {
+      console.log(`Group ${chatId} not found in runtime groups.`);
+
+      // Check if it's in config
+      const bots = resolveBots(config);
+      const botConfig = bots.find(b => b.botId === botId);
+      if (botConfig?.groups[chatId]) {
+        console.log(`Note: This group is configured in config.yaml. Edit the file to remove it.`);
+      }
+      return;
+    }
+
+    delete groups[chatId];
+    const tmp = groupsPath + ".tmp";
+    writeFileSync(tmp, JSON.stringify({ version: 1, groups }, null, 2));
+    renameSync(tmp, groupsPath);
+    console.log(`Group ${chatId} removed. No restart needed.`);
+  });
+
+group
+  .command("approve")
+  .description("Approve a group pairing code")
+  .argument("<code>", "Pairing code from the group")
+  .option("-c, --config <path>", "Path to config file")
+  .option("--bot <name>", "Bot name")
   .action((code: string, opts: { config?: string; bot?: string }) => {
     const dataDir = getDataDir(opts.config);
     const config = loadConfig(opts.config);
     const { botId } = resolveBotId(config, opts.bot);
     const pairingPath = join(dataDir, "credentials", botId, "telegram-pairing.json");
-    const allowPath = join(dataDir, "credentials", botId, "telegram-allowFrom.json");
+    const groupsPath = join(dataDir, "credentials", botId, "telegram-groups.json");
+
     const pm = new PairingManager(pairingPath);
     const result = pm.approve(code);
     if (!result) {
       console.error(`No pending request with code "${code}".`);
       process.exit(1);
     }
-    let allowFrom: string[] = [];
-    if (existsSync(allowPath)) {
+
+    // Extract chat ID from "group:<chatId>" format
+    const chatId = result.senderId.replace(/^group:/, "");
+
+    let groups: Record<string, { enabled: boolean; allowFrom?: string[] }> = {};
+    if (existsSync(groupsPath)) {
       try {
-        allowFrom = JSON.parse(readFileSync(allowPath, "utf-8")).allowFrom ?? [];
+        groups = JSON.parse(readFileSync(groupsPath, "utf-8")).groups ?? {};
       } catch {}
     }
-    if (!allowFrom.includes(result.senderId)) {
-      allowFrom.push(result.senderId);
-      mkdirSync(join(dataDir, "credentials", botId), { recursive: true });
-      const tmp = allowPath + ".tmp";
-      writeFileSync(tmp, JSON.stringify({ version: 1, allowFrom }, null, 2));
-      renameSync(tmp, allowPath);
+
+    groups[chatId] = { enabled: true };
+    mkdirSync(join(dataDir, "credentials", botId), { recursive: true });
+    const tmp = groupsPath + ".tmp";
+    writeFileSync(tmp, JSON.stringify({ version: 1, groups }, null, 2));
+    renameSync(tmp, groupsPath);
+    console.log(`Group ${chatId} approved and enabled. No restart needed.`);
+  });
+
+group
+  .command("disable")
+  .description("Disable a group without removing it")
+  .argument("<chatId>", "Group chat ID")
+  .option("-c, --config <path>", "Path to config file")
+  .option("--bot <name>", "Bot name")
+  .action((chatId: string, opts: { config?: string; bot?: string }) => {
+    const dataDir = getDataDir(opts.config);
+    const config = loadConfig(opts.config);
+    const { botId } = resolveBotId(config, opts.bot);
+    const groupsPath = join(dataDir, "credentials", botId, "telegram-groups.json");
+
+    let groups: Record<string, { enabled: boolean; allowFrom?: string[] }> = {};
+    if (existsSync(groupsPath)) {
+      try {
+        groups = JSON.parse(readFileSync(groupsPath, "utf-8")).groups ?? {};
+      } catch {}
     }
-    console.log(`Approved sender ${result.senderId}. They can now use the bot.`);
+
+    groups[chatId] = { ...(groups[chatId] ?? {}), enabled: false };
+    mkdirSync(join(dataDir, "credentials", botId), { recursive: true });
+    const tmp = groupsPath + ".tmp";
+    writeFileSync(tmp, JSON.stringify({ version: 1, groups }, null, 2));
+    renameSync(tmp, groupsPath);
+    console.log(`Group ${chatId} disabled. No restart needed.`);
   });
 
 // --- allow ---
@@ -574,12 +771,188 @@ allow
     console.log(`Removed ${id} from ${channel} allowlist.`);
   });
 
-// --- agent ---
-const agent = program.command("agent").description("Manage agent personality (SOUL.md)");
+// --- bot ---
+const bot = program.command("bot").description("Manage bots");
 
-agent
+bot
+  .command("list")
+  .description("List all configured bots")
+  .option("-c, --config <path>", "Path to config file")
+  .action(async (opts: { config?: string }) => {
+    const config = loadConfig(opts.config);
+    const bots = resolveBots(config);
+    const dataDir = getDataDir(opts.config);
+
+    if (bots.length === 0) {
+      console.log("No bots configured. Add one with: openclaude bot add <token>");
+      return;
+    }
+
+    // Check if gateway is running
+    const pid = getRunningPid(dataDir);
+
+    console.log("Bots:\n");
+    for (const b of bots) {
+      const status = pid ? "running" : "stopped";
+      // Try to get username from Telegram API
+      let username = "";
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${b.token}/getMe`);
+        const data = await res.json() as { ok: boolean; result?: { username?: string } };
+        if (data.ok && data.result?.username) username = `@${data.result.username}`;
+      } catch {}
+      const line = [
+        `  ${b.name}`,
+        `(${b.botId})`,
+        username,
+        status,
+        `${b.dmPolicy}/${b.groupPolicy}`,
+      ].filter(Boolean).join("  ");
+      console.log(line);
+    }
+  });
+
+bot
+  .command("add")
+  .description("Add a new bot")
+  .argument("<token>", "Telegram bot token from BotFather")
+  .option("-n, --name <name>", "Bot name (default: auto-detect from Telegram)")
+  .option("-c, --config <path>", "Path to config file")
+  .action(async (token: string, opts: { name?: string; config?: string }) => {
+    // Validate token format
+    if (!token.includes(":")) {
+      console.error("Invalid token format. Expected: <bot_id>:<secret>");
+      process.exit(1);
+    }
+
+    const botId = token.split(":")[0];
+
+    // Check for duplicate
+    const config = loadConfig(opts.config);
+    const existing = resolveBots(config);
+    if (existing.find(b => b.botId === botId)) {
+      console.error(`Bot ${botId} is already configured.`);
+      process.exit(1);
+    }
+
+    // Get bot info from Telegram
+    let name = opts.name;
+    let username = "";
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+      const data = await res.json() as { ok: boolean; result?: { first_name?: string; username?: string }; description?: string };
+      if (!data.ok) {
+        console.error(`Invalid token: Telegram API rejected it.`);
+        process.exit(1);
+      }
+      if (!name && data.result?.first_name) {
+        name = data.result.first_name.toLowerCase().replace(/\s+/g, "-");
+      }
+      if (data.result?.username) {
+        username = `@${data.result.username}`;
+      }
+    } catch (err) {
+      console.error(`Failed to connect to Telegram API: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+
+    if (!name) name = `bot-${botId}`;
+
+    // Modify config.yaml using Document API to preserve formatting
+    const configPath = opts.config ?? resolve(process.env.HOME ?? "~", ".openclaude", "config.yaml");
+    const content = readFileSync(configPath, "utf-8");
+    const doc = parseDocument(content);
+
+    // Ensure bots array exists
+    if (!doc.has("bots")) {
+      doc.set("bots", []);
+    }
+    const botsNode = doc.get("bots") as import("yaml").YAMLSeq;
+    botsNode.add(doc.createNode({
+      name,
+      token,
+      auth: { dmPolicy: "pairing", groupPolicy: "pairing" },
+    }));
+
+    writeFileSync(configPath, doc.toString());
+
+    console.log(`Added bot "${name}" (${botId}) ${username}`);
+    console.log(`Config saved to ${configPath}`);
+
+    // Trigger hot-reload if gateway is running
+    const dataDir = getDataDir(opts.config);
+    const pid = getRunningPid(dataDir);
+    if (pid) {
+      try {
+        await fetch(`http://127.0.0.1:${config.gateway.port}/api/reload-config`, { method: "POST" });
+        console.log("Gateway reloaded — new bot should be starting.");
+      } catch {
+        console.log("Gateway is running but reload failed. Restart with: openclaude gateway restart");
+      }
+    } else {
+      console.log("Start the gateway with: openclaude gateway start");
+    }
+  });
+
+bot
+  .command("remove")
+  .description("Remove a bot")
+  .argument("<name>", "Bot name to remove")
+  .option("-c, --config <path>", "Path to config file")
+  .action(async (name: string, opts: { config?: string }) => {
+    const configPath = opts.config ?? resolve(process.env.HOME ?? "~", ".openclaude", "config.yaml");
+    const content = readFileSync(configPath, "utf-8");
+    const doc = parseDocument(content);
+
+    const botsNode = doc.get("bots") as import("yaml").YAMLSeq | undefined;
+    if (!botsNode || botsNode.items.length === 0) {
+      console.error("No bots configured.");
+      process.exit(1);
+    }
+
+    // Find the bot by name
+    let foundIdx = -1;
+    for (let i = 0; i < botsNode.items.length; i++) {
+      const item = botsNode.items[i] as import("yaml").YAMLMap;
+      const itemName = item.get("name");
+      if (itemName === name) {
+        foundIdx = i;
+        break;
+      }
+    }
+
+    if (foundIdx === -1) {
+      const config = loadConfig(opts.config);
+      const bots = resolveBots(config);
+      console.error(`Bot "${name}" not found. Available: ${bots.map(b => b.name).join(", ")}`);
+      process.exit(1);
+    }
+
+    botsNode.items.splice(foundIdx, 1);
+    writeFileSync(configPath, doc.toString());
+
+    console.log(`Removed bot "${name}" from config.`);
+
+    // Trigger hot-reload if gateway is running
+    const config = loadConfig(opts.config);
+    const dataDir = getDataDir(opts.config);
+    const pid = getRunningPid(dataDir);
+    if (pid) {
+      try {
+        await fetch(`http://127.0.0.1:${config.gateway.port}/api/reload-config`, { method: "POST" });
+        console.log("Gateway reloaded.");
+      } catch {
+        console.log("Restart gateway to apply: openclaude gateway restart");
+      }
+    }
+  });
+
+// --- bot soul ---
+const soul = bot.command("soul").description("Manage bot personality (SOUL.md)");
+
+soul
   .command("show")
-  .description("Show current SOUL.md for the bot")
+  .description("Show current SOUL.md")
   .option("-c, --config <path>", "Path to config file")
   .option("--bot <name>", "Bot name")
   .action((opts: { config?: string; bot?: string }) => {
@@ -589,14 +962,14 @@ agent
     const soulPath = join(dataDir, "agents", botId, "SOUL.md");
     if (!existsSync(soulPath)) {
       console.log(`No SOUL.md found for bot ${name} (${botId}).`);
-      console.log(`Create one with: openclaude agent edit`);
+      console.log(`Create one with: openclaude bot soul edit`);
       return;
     }
     console.log(`SOUL.md for bot ${name} (${soulPath}):\n`);
     console.log(readFileSync(soulPath, "utf-8"));
   });
 
-agent
+soul
   .command("edit")
   .description("Edit SOUL.md in your default editor")
   .option("-c, --config <path>", "Path to config file")
@@ -617,13 +990,13 @@ agent
     const child = spawn(editor, [soulPath], { stdio: "inherit" });
     child.on("exit", (code) => {
       if (code === 0) {
-        console.log(`SOUL.md saved. Restart the gateway to apply changes.`);
+        console.log(`SOUL.md saved. Changes apply to new sessions.`);
       }
       process.exit(code ?? 0);
     });
   });
 
-agent
+soul
   .command("reset")
   .description("Delete SOUL.md (reset to default behavior)")
   .option("-c, --config <path>", "Path to config file")
@@ -638,10 +1011,10 @@ agent
       return;
     }
     unlinkSync(soulPath);
-    console.log(`SOUL.md removed for bot ${name} (${botId}). Restart the gateway to apply.`);
+    console.log(`SOUL.md removed for bot ${name} (${botId}).`);
   });
 
-agent
+soul
   .command("path")
   .description("Print the SOUL.md file path")
   .option("-c, --config <path>", "Path to config file")

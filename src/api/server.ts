@@ -14,7 +14,7 @@ export interface ApiServerConfig {
   /** Set of chat IDs allowed to query chat history (group chats only) */
   allowedChatIds?: Set<string>;
   /** Callback to trigger config reload */
-  onReloadConfig?: () => { ok: boolean; changes: string[] };
+  onReloadConfig?: () => Promise<{ ok: boolean; changes: string[] }>;
 }
 
 export class ApiServer {
@@ -213,7 +213,7 @@ export class ApiServer {
       res.end(JSON.stringify({ error: "Reload not configured" }));
       return;
     }
-    const result = this.config.onReloadConfig();
+    const result = await this.config.onReloadConfig();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(result));
   }

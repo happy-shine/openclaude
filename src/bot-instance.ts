@@ -29,6 +29,7 @@ export class BotInstance {
   private log: Logger;
   private dataDir: string;
   private allowFrom: Set<string>;
+  private runtimeGroups: Record<string, { enabled: boolean; allowFrom?: string[] }>;
   private lastButtonMsg = new Map<string, string>();
   private chatQueues = new Map<string, Promise<void>>();
   private gatewayConfig: GatewayConfig;
@@ -70,6 +71,9 @@ export class BotInstance {
 
     // Load allow-from list
     this.allowFrom = this.loadAllowFrom();
+
+    // Load runtime groups (approved via pairing / CLI)
+    this.runtimeGroups = this.loadRuntimeGroups();
   }
 
   // --- AllowFrom management ---
@@ -101,12 +105,44 @@ export class BotInstance {
     this.allowFrom = this.loadAllowFrom();
   }
 
+  // --- Runtime groups management ---
+
+  private getRuntimeGroupsPath(): string {
+    return join(this.dataDir, "credentials", this.botId, "telegram-groups.json");
+  }
+
+  private loadRuntimeGroups(): Record<string, { enabled: boolean; allowFrom?: string[] }> {
+    const filePath = this.getRuntimeGroupsPath();
+    if (existsSync(filePath)) {
+      try {
+        return JSON.parse(readFileSync(filePath, "utf-8")).groups ?? {};
+      } catch {
+        // ignore malformed file
+      }
+    }
+    return {};
+  }
+
+  private saveRuntimeGroups(): void {
+    const filePath = this.getRuntimeGroupsPath();
+    mkdirSync(join(this.dataDir, "credentials", this.botId), { recursive: true });
+    const tmp = filePath + ".tmp";
+    writeFileSync(tmp, JSON.stringify({ version: 1, groups: this.runtimeGroups }, null, 2));
+    renameSync(tmp, filePath);
+  }
+
+  /** Merge config groups with runtime groups (runtime wins on conflict) */
+  private mergedGroups(): Record<string, { enabled: boolean; allowFrom?: string[] }> {
+    return { ...this.config.groups, ...this.runtimeGroups };
+  }
+
   // --- Access control ---
 
   private checkMessageAccess(msg: InboundMessage) {
-    // Reload allowFrom from disk on every check so CLI-side approvals
+    // Reload from disk on every check so CLI-side approvals
     // are picked up by the running instance without a restart.
     this.allowFrom = this.loadAllowFrom();
+    this.runtimeGroups = this.loadRuntimeGroups();
     return checkAccess({
       senderId: msg.senderId,
       chatId: msg.chatId,
@@ -114,7 +150,7 @@ export class BotInstance {
       dmPolicy: this.config.dmPolicy,
       groupPolicy: this.config.groupPolicy,
       allowFrom: [...this.allowFrom],
-      groups: this.config.groups,
+      groups: this.mergedGroups(),
     });
   }
 
@@ -278,6 +314,8 @@ export class BotInstance {
     if (!access.allowed) {
       if (access.reason === "needs_pairing") {
         await this.handlePairingChallenge(msg);
+      } else if (access.reason === "needs_group_pairing") {
+        await this.handleGroupPairingChallenge(msg);
       } else if (access.reason === "group_not_configured") {
         await this.telegram.send({
           chatId: msg.chatId,
@@ -462,6 +500,26 @@ export class BotInstance {
       "",
       "Ask the bot owner to approve with:",
       `  openclaude pairing approve ${req.code}`,
+    ].join("\n");
+    await this.telegram.send({ chatId: msg.chatId, text });
+  }
+
+  private async handleGroupPairingChallenge(msg: InboundMessage): Promise<void> {
+    // Reuse pairing manager but store chatId as the "senderId" key so each group gets one code
+    const req = this.pairingManager.challenge(
+      `group:${msg.chatId}`,
+      `Group ${msg.chatId}`,
+      msg.channelType,
+      msg.chatId,
+    );
+    const text = [
+      "This group is not yet authorized.",
+      "",
+      `Group chat ID: ${msg.chatId}`,
+      `Pairing code: ${req.code}`,
+      "",
+      "Ask the bot owner to approve with:",
+      `  openclaude group approve ${req.code}`,
     ].join("\n");
     await this.telegram.send({ chatId: msg.chatId, text });
   }
@@ -814,9 +872,55 @@ export class BotInstance {
     return result;
   }
 
-  /** Get all configured group chat IDs for this bot */
+  // --- Group management ---
+
+  /** Approve a group pairing code — adds the group to the runtime store */
+  approveGroupPairing(code: string): { chatId: string } | null {
+    const result = this.pairingManager.approve(code);
+    if (!result) return null;
+    // The senderId for group pairing is "group:<chatId>"
+    const chatId = result.senderId.replace(/^group:/, "");
+    this.runtimeGroups = this.loadRuntimeGroups();
+    this.runtimeGroups[chatId] = { enabled: true };
+    this.saveRuntimeGroups();
+    return { chatId };
+  }
+
+  /** Add a group to the runtime store */
+  addGroup(chatId: string, config?: { allowFrom?: string[] }): void {
+    this.runtimeGroups = this.loadRuntimeGroups();
+    this.runtimeGroups[chatId] = { enabled: true, ...config };
+    this.saveRuntimeGroups();
+  }
+
+  /** Remove a group from the runtime store */
+  removeGroup(chatId: string): boolean {
+    this.runtimeGroups = this.loadRuntimeGroups();
+    if (!(chatId in this.runtimeGroups)) return false;
+    delete this.runtimeGroups[chatId];
+    this.saveRuntimeGroups();
+    return true;
+  }
+
+  /** Get all configured group chat IDs (config + runtime merged) */
   getGroupChatIds(): string[] {
-    return Object.keys(this.config.groups);
+    return Object.keys(this.mergedGroups());
+  }
+
+  /** Get all groups with their config (config + runtime merged) */
+  getAllGroups(): Record<string, { enabled: boolean; allowFrom?: string[]; source: "config" | "runtime" | "both" }> {
+    const configGroups = this.config.groups;
+    this.runtimeGroups = this.loadRuntimeGroups();
+    const result: Record<string, { enabled: boolean; allowFrom?: string[]; source: "config" | "runtime" | "both" }> = {};
+    for (const [id, g] of Object.entries(configGroups)) {
+      result[id] = { ...g, source: id in this.runtimeGroups ? "both" : "config" };
+    }
+    for (const [id, g] of Object.entries(this.runtimeGroups)) {
+      if (!(id in result)) {
+        result[id] = { ...g, source: "runtime" };
+      }
+    }
+    return result;
   }
 }
 

@@ -74,7 +74,7 @@ export class Gateway {
     }
   }
 
-  reloadConfig(): { ok: boolean; changes: string[] } {
+  async reloadConfig(): Promise<{ ok: boolean; changes: string[] }> {
     try {
       const newConfig = loadConfig(this.configPath);
       const changes: string[] = [];
@@ -104,6 +104,40 @@ export class Gateway {
       if (newConfig.gateway.logLevel !== this.config.gateway.logLevel) {
         changes.push(`logLevel: ${this.config.gateway.logLevel} -> ${newConfig.gateway.logLevel}`);
         this.log.level = newConfig.gateway.logLevel;
+      }
+
+      // --- Dynamic bot add/remove ---
+      const newBotConfigs = resolveBots(newConfig);
+      const newBotIds = new Set(newBotConfigs.map(b => b.botId));
+      const currentBotIds = new Set(this.bots.keys());
+
+      // Stop removed bots
+      for (const botId of currentBotIds) {
+        if (!newBotIds.has(botId)) {
+          const bot = this.bots.get(botId)!;
+          this.log.info({ botId, botName: bot.name }, "Stopping removed bot");
+          await bot.stop();
+          this.bots.delete(botId);
+          changes.push(`bot removed: ${bot.name} (${botId})`);
+        }
+      }
+
+      // Start newly added bots
+      for (const botConfig of newBotConfigs) {
+        if (!currentBotIds.has(botConfig.botId)) {
+          const bot = new BotInstance({
+            botConfig,
+            gatewayConfig: newConfig,
+            processManager: this.processManager,
+            messageStore: this.messageStore,
+            dataDir: this.dataDir,
+            log: this.log,
+          });
+          this.bots.set(bot.botId, bot);
+          await bot.start();
+          this.log.info({ botId: bot.botId, botName: bot.name }, "Started new bot");
+          changes.push(`bot added: ${bot.name} (${bot.botId})`);
+        }
       }
 
       // Update allowed chat IDs from all bots
@@ -138,7 +172,9 @@ export class Gateway {
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
           this.log.info("Config file changed, reloading...");
-          this.reloadConfig();
+          this.reloadConfig().catch((err) => {
+            this.log.error({ error: err instanceof Error ? err.message : String(err) }, "Config reload error");
+          });
         }, 500);
       });
       this.log.info({ path: this.configPath }, "Watching config for changes");

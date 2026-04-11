@@ -112,13 +112,9 @@ export function resolveBots(config: GatewayConfig): ResolvedBotConfig[] {
     // Resolve dmPolicy: bot auth > top-level defaultPolicy (mapped to dm-compatible value)
     const dmPolicy = bot.auth?.dmPolicy ?? defaultPolicy;
 
-    // Resolve groupPolicy: bot auth > "disabled" default
-    // Note: defaultPolicy "pairing" is not valid for groupPolicy, so default to "disabled"
+    // Resolve groupPolicy: bot auth > top-level defaultPolicy
     const groupPolicy =
-      bot.auth?.groupPolicy ??
-      (defaultPolicy === "open" || defaultPolicy === "allowlist" || defaultPolicy === "disabled"
-        ? defaultPolicy
-        : "disabled");
+      bot.auth?.groupPolicy ?? defaultPolicy;
 
     return {
       name: bot.name,

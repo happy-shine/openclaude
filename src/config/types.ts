@@ -28,7 +28,7 @@ export interface BotConfig {
   extraArgs?: string[];
   auth?: {
     dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
-    groupPolicy?: "open" | "allowlist" | "disabled";
+    groupPolicy?: "open" | "pairing" | "allowlist" | "disabled";
     allowFrom?: string[];
     groups?: Record<string, TelegramGroupConfig>;
   };
@@ -41,7 +41,7 @@ export interface ResolvedBotConfig {
   model?: string;
   extraArgs: string[];
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom: string[];
   groups: Record<string, TelegramGroupConfig>;
 }
@@ -49,7 +49,7 @@ export interface ResolvedBotConfig {
 export interface TelegramChannelConfig {
   botToken: string;
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom: string[];
   groups: Record<string, TelegramGroupConfig>;
 }
