@@ -10,7 +10,7 @@ import { SessionStore } from "./sessions/store.js";
 import { ProcessManager } from "./process/manager.js";
 import { checkAccess } from "./auth/access.js";
 import { PairingManager } from "./auth/pairing.js";
-import { splitMessage } from "./channels/telegram/formatter.js";
+import { splitMessage, toMarkdownV2 } from "./channels/telegram/formatter.js";
 import { ProgressTracker, getToolDetail } from "./progress.js";
 import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
@@ -453,31 +453,34 @@ export class BotInstance {
           if (finalText.length > 0) {
             const { text: cleanText, buttons } = extractButtons(finalText);
             const progressMsgId = progress.getMessageId();
+            const mdv2 = toMarkdownV2(cleanText);
+            const chunks = splitMessage(mdv2);
 
             if (buttons.length > 0) {
               if (progressMsgId) {
                 await this.telegram.deleteMessage(msg.chatId, progressMsgId);
               }
               const btnMsgId = await this.telegram.sendWithButtons(
-                msg.chatId, splitMessage(cleanText)[0], buttons, msg.messageId,
+                msg.chatId, chunks[0], buttons, msg.messageId, "MarkdownV2",
               );
               this.lastButtonMsg.set(msg.chatId, btnMsgId);
               this.telegram.notifyOutbound(msg.chatId, cleanText, btnMsgId);
-              for (const chunk of splitMessage(cleanText).slice(1)) {
-                await this.telegram.send({ chatId: msg.chatId, text: chunk });
+              for (const chunk of chunks.slice(1)) {
+                await this.telegram.send({ chatId: msg.chatId, text: chunk, parseMode: "MarkdownV2" });
               }
             } else if (progressMsgId) {
-              await this.telegram.editMessage(msg.chatId, progressMsgId, splitMessage(cleanText)[0]);
+              await this.telegram.editMessage(msg.chatId, progressMsgId, chunks[0], undefined, "MarkdownV2");
               // Trigger relay for the final edited content
               this.telegram.notifyOutbound(msg.chatId, cleanText, progressMsgId);
-              for (const chunk of splitMessage(cleanText).slice(1)) {
-                await this.telegram.send({ chatId: msg.chatId, text: chunk });
+              for (const chunk of chunks.slice(1)) {
+                await this.telegram.send({ chatId: msg.chatId, text: chunk, parseMode: "MarkdownV2" });
               }
             } else {
-              for (let i = 0; i < splitMessage(cleanText).length; i++) {
+              for (let i = 0; i < chunks.length; i++) {
                 await this.telegram.send({
                   chatId: msg.chatId,
-                  text: splitMessage(cleanText)[i],
+                  text: chunks[i],
+                  parseMode: "MarkdownV2",
                   ...(i === 0 ? { replyToMessageId: msg.messageId } : {}),
                 });
               }
@@ -611,17 +614,19 @@ export class BotInstance {
 
           if (finalText.length > 0) {
             const progressMsgId = progress.getMessageId();
-            const chunks = splitMessage(finalText);
+            const mdv2 = toMarkdownV2(finalText);
+            const chunks = splitMessage(mdv2);
             if (progressMsgId) {
-              await this.telegram.editMessage(msg.chatId, progressMsgId, chunks[0]);
+              await this.telegram.editMessage(msg.chatId, progressMsgId, chunks[0], undefined, "MarkdownV2");
               for (const chunk of chunks.slice(1)) {
-                await this.telegram.send({ chatId: msg.chatId, text: chunk });
+                await this.telegram.send({ chatId: msg.chatId, text: chunk, parseMode: "MarkdownV2" });
               }
             } else {
               for (let i = 0; i < chunks.length; i++) {
                 await this.telegram.send({
                   chatId: msg.chatId,
                   text: chunks[i],
+                  parseMode: "MarkdownV2",
                   ...(i === 0 ? { replyToMessageId: msg.messageId } : {}),
                 });
               }

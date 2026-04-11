@@ -4,8 +4,8 @@ import type { ChannelAdapter, OutboundMessage, MessageHandler, CommandHandler } 
 import type { MessageStore } from "../../sessions/message-store.js";
 import { createBot } from "./bot.js";
 import { registerHandlers } from "./handlers.js";
-import { splitMessage, toMarkdownV2, truncateV2 } from "./formatter.js";
-import { writeFileSync, mkdirSync, createReadStream } from "node:fs";
+import { splitMessage } from "./formatter.js";
+import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { InputFile } from "grammy";
 
@@ -171,16 +171,28 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   async send(msg: OutboundMessage): Promise<string> {
-    const mdv2 = toMarkdownV2(msg.text);
-    const chunks = splitMessage(mdv2);
+    const chunks = splitMessage(msg.text);
     let lastMessageId = "";
     for (let i = 0; i < chunks.length; i++) {
       const replyOpts = i === 0 && msg.replyToMessageId
         ? { reply_parameters: { message_id: Number(msg.replyToMessageId) } }
         : {};
-      const sent = await this.sendTextWithFallback(
-        Number(msg.chatId), chunks[i], msg.text, replyOpts,
-      );
+      const parseOpts = msg.parseMode ? { parse_mode: msg.parseMode as "MarkdownV2" | "HTML" } : {};
+      let sent;
+      try {
+        sent = await this.bot.api.sendMessage(Number(msg.chatId), chunks[i], {
+          ...parseOpts,
+          ...replyOpts,
+        });
+      } catch (err) {
+        // Fallback to plain text on parse error
+        if (msg.parseMode && err instanceof Error && err.message?.includes("can't parse entities")) {
+          this.log.warn({ parseMode: msg.parseMode }, "parse failed in send, falling back to plain text");
+          sent = await this.bot.api.sendMessage(Number(msg.chatId), msg.text.slice(i === 0 ? 0 : chunks.slice(0, i).join("").length, 4096), replyOpts);
+        } else {
+          throw err;
+        }
+      }
       lastMessageId = String(sent.message_id);
       this.recordOutbound(msg.chatId, String(sent.message_id), chunks[i]);
     }
@@ -188,50 +200,30 @@ export class TelegramAdapter implements ChannelAdapter {
     return lastMessageId;
   }
 
-  async editMessage(chatId: string, messageId: string, text: string, buttons?: string[]): Promise<void> {
-    const mdv2 = truncateV2(toMarkdownV2(text));
+  async editMessage(chatId: string, messageId: string, text: string, buttons?: string[], parseMode?: "MarkdownV2" | "HTML"): Promise<void> {
+    const truncated = text.slice(0, 4096);
     const btnOpts = buttons && buttons.length > 0
       ? { reply_markup: { inline_keyboard: buildButtonRows(buttons) } }
       : {};
+    const parseOpts = parseMode ? { parse_mode: parseMode } : {};
     try {
-      await this.bot.api.editMessageText(Number(chatId), Number(messageId), mdv2, {
-        parse_mode: "MarkdownV2",
+      await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated, {
+        ...parseOpts,
         ...btnOpts,
       });
-      this.recordOutbound(chatId, messageId, mdv2);
+      this.recordOutbound(chatId, messageId, truncated);
     } catch (err: unknown) {
       if (err instanceof Error && err.message?.includes("message is not modified")) return;
       // Fallback: retry as plain text on parse error
-      if (err instanceof Error && err.message?.includes("can't parse entities")) {
-        this.log.warn("MarkdownV2 parse failed in editMessage, falling back to plain text");
-        const plain = text.slice(0, 4096);
+      if (parseMode && err instanceof Error && err.message?.includes("can't parse entities")) {
+        this.log.warn({ parseMode }, "parse failed in editMessage, falling back to plain text");
         try {
-          await this.bot.api.editMessageText(Number(chatId), Number(messageId), plain, btnOpts);
-          this.recordOutbound(chatId, messageId, plain);
+          await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated, btnOpts);
+          this.recordOutbound(chatId, messageId, truncated);
         } catch (e2: unknown) {
           if (e2 instanceof Error && !e2.message?.includes("message is not modified")) throw e2;
         }
         return;
-      }
-      throw err;
-    }
-  }
-
-  /**
-   * Send a message with MarkdownV2 parse mode. On parse error, retry as plain text.
-   */
-  private async sendTextWithFallback(
-    chatId: number, mdv2Text: string, plainText: string, opts: Record<string, unknown> = {},
-  ) {
-    try {
-      return await this.bot.api.sendMessage(chatId, mdv2Text, {
-        parse_mode: "MarkdownV2",
-        ...opts,
-      });
-    } catch (err) {
-      if (err instanceof Error && err.message?.includes("can't parse entities")) {
-        this.log.warn("MarkdownV2 parse failed, falling back to plain text");
-        return await this.bot.api.sendMessage(chatId, plainText.slice(0, 4096), opts);
       }
       throw err;
     }
@@ -278,29 +270,42 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /** Send a message with a custom inline keyboard layout */
-  async sendWithKeyboard(chatId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>): Promise<string> {
-    const mdv2 = truncateV2(toMarkdownV2(text));
-    const sent = await this.sendTextWithFallback(
-      Number(chatId), mdv2, text, { reply_markup: { inline_keyboard: keyboard } },
-    );
-    return String(sent.message_id);
+  async sendWithKeyboard(chatId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>, parseMode?: "MarkdownV2" | "HTML"): Promise<string> {
+    const truncated = text.slice(0, 4096);
+    const parseOpts = parseMode ? { parse_mode: parseMode } : {};
+    try {
+      const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
+        ...parseOpts,
+        reply_markup: { inline_keyboard: keyboard },
+      });
+      return String(sent.message_id);
+    } catch (err) {
+      if (parseMode && err instanceof Error && err.message?.includes("can't parse entities")) {
+        this.log.warn({ parseMode }, "parse failed in sendWithKeyboard, falling back");
+        const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
+          reply_markup: { inline_keyboard: keyboard },
+        });
+        return String(sent.message_id);
+      }
+      throw err;
+    }
   }
 
   /** Edit a message's text and inline keyboard */
-  async editMessageWithKeyboard(chatId: string, messageId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>): Promise<void> {
-    const mdv2 = truncateV2(toMarkdownV2(text));
+  async editMessageWithKeyboard(chatId: string, messageId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>, parseMode?: "MarkdownV2" | "HTML"): Promise<void> {
+    const truncated = text.slice(0, 4096);
+    const parseOpts = parseMode ? { parse_mode: parseMode } : {};
     try {
-      await this.bot.api.editMessageText(Number(chatId), Number(messageId), mdv2, {
-        parse_mode: "MarkdownV2",
+      await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated, {
+        ...parseOpts,
         reply_markup: { inline_keyboard: keyboard },
       });
     } catch (err: unknown) {
       if (err instanceof Error && err.message?.includes("message is not modified")) return;
-      if (err instanceof Error && err.message?.includes("can't parse entities")) {
-        this.log.warn("MarkdownV2 parse failed in editMessageWithKeyboard, falling back");
-        const plain = text.slice(0, 4096);
+      if (parseMode && err instanceof Error && err.message?.includes("can't parse entities")) {
+        this.log.warn({ parseMode }, "parse failed in editMessageWithKeyboard, falling back");
         try {
-          await this.bot.api.editMessageText(Number(chatId), Number(messageId), plain, {
+          await this.bot.api.editMessageText(Number(chatId), Number(messageId), truncated, {
             reply_markup: { inline_keyboard: keyboard },
           });
         } catch (e2: unknown) {
@@ -313,17 +318,30 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /** Send a message with inline keyboard buttons */
-  async sendWithButtons(chatId: string, text: string, buttons: (string | { text: string; data: string })[], replyToMessageId?: string): Promise<string> {
-    const mdv2 = truncateV2(toMarkdownV2(text));
+  async sendWithButtons(chatId: string, text: string, buttons: (string | { text: string; data: string })[], replyToMessageId?: string, parseMode?: "MarkdownV2" | "HTML"): Promise<string> {
+    const truncated = text.slice(0, 4096);
+    const parseOpts = parseMode ? { parse_mode: parseMode } : {};
     const opts = {
+      ...parseOpts,
       ...(replyToMessageId
         ? { reply_parameters: { message_id: Number(replyToMessageId) } }
         : {}),
       reply_markup: { inline_keyboard: buildButtonRows(buttons) },
     };
-    const sent = await this.sendTextWithFallback(Number(chatId), mdv2, text, opts);
-    this.recordOutbound(chatId, String(sent.message_id), mdv2);
-    return String(sent.message_id);
+    try {
+      const sent = await this.bot.api.sendMessage(Number(chatId), truncated, opts);
+      this.recordOutbound(chatId, String(sent.message_id), truncated);
+      return String(sent.message_id);
+    } catch (err) {
+      if (parseMode && err instanceof Error && err.message?.includes("can't parse entities")) {
+        this.log.warn({ parseMode }, "parse failed in sendWithButtons, falling back");
+        const { parse_mode: _, ...plainOpts } = opts as Record<string, unknown>;
+        const sent = await this.bot.api.sendMessage(Number(chatId), truncated, plainOpts);
+        this.recordOutbound(chatId, String(sent.message_id), truncated);
+        return String(sent.message_id);
+      }
+      throw err;
+    }
   }
 
   /** Download a Telegram file to local disk, return local path */

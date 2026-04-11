@@ -30,7 +30,7 @@ export interface Attachment {
 export interface OutboundMessage {
   chatId: string;
   text: string;
-  parseMode?: "html" | "markdown";
+  parseMode?: "MarkdownV2" | "HTML";
   replyToMessageId?: string;
   attachments?: OutboundAttachment[];
 }
@@ -49,7 +49,7 @@ export interface ChannelAdapter {
   start(): Promise<void>;
   stop(): Promise<void>;
   send(msg: OutboundMessage): Promise<string>;
-  editMessage(chatId: string, messageId: string, text: string): Promise<void>;
+  editMessage(chatId: string, messageId: string, text: string, buttons?: string[], parseMode?: "MarkdownV2" | "HTML"): Promise<void>;
   onMessage(handler: MessageHandler): void;
   onCommand(command: string, handler: CommandHandler): void;
   sendTyping(chatId: string): Promise<void>;
