@@ -173,16 +173,18 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /** Send a photo from local path */
-  async sendPhoto(chatId: string, filePath: string, caption?: string): Promise<void> {
+  async sendPhoto(chatId: string, filePath: string, caption?: string, replyToMessageId?: string): Promise<void> {
     await this.bot.api.sendPhoto(Number(chatId), new InputFile(filePath), {
       caption,
+      ...(replyToMessageId ? { reply_parameters: { message_id: Number(replyToMessageId) } } : {}),
     });
   }
 
   /** Send a document from local path */
-  async sendDocument(chatId: string, filePath: string, caption?: string): Promise<void> {
+  async sendDocument(chatId: string, filePath: string, caption?: string, replyToMessageId?: string): Promise<void> {
     await this.bot.api.sendDocument(Number(chatId), new InputFile(filePath), {
       caption,
+      ...(replyToMessageId ? { reply_parameters: { message_id: Number(replyToMessageId) } } : {}),
     });
   }
 
