@@ -278,12 +278,14 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /** Send a message with a custom inline keyboard layout */
-  async sendWithKeyboard(chatId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>, parseMode?: "MarkdownV2" | "HTML", plainFallback?: string): Promise<string> {
+  async sendWithKeyboard(chatId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>, parseMode?: "MarkdownV2" | "HTML", plainFallback?: string, threadId?: string): Promise<string> {
     const truncated = text.slice(0, 4096);
     const parseOpts = parseMode ? { parse_mode: parseMode } : {};
+    const threadOpts = threadId ? { message_thread_id: Number(threadId) } : {};
     try {
       const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
         ...parseOpts,
+        ...threadOpts,
         reply_markup: { inline_keyboard: keyboard },
       });
       return String(sent.message_id);
@@ -292,6 +294,7 @@ export class TelegramAdapter implements ChannelAdapter {
         this.log.warn({ parseMode }, "parse failed in sendWithKeyboard, falling back");
         const fallbackText = (plainFallback ?? text).slice(0, 4096);
         const sent = await this.bot.api.sendMessage(Number(chatId), fallbackText, {
+          ...threadOpts,
           reply_markup: { inline_keyboard: keyboard },
         });
         return String(sent.message_id);

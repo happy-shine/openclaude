@@ -748,7 +748,7 @@ export class BotInstance {
       buttonRows.push(navRow);
     }
 
-    await this.telegram.sendWithKeyboard(msg.chatId, text, buttonRows);
+    await this.telegram.sendWithKeyboard(msg.chatId, text, buttonRows, undefined, undefined, msg.threadId);
   }
 
   private async handleHelp(msg: InboundMessage): Promise<void> {
