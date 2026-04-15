@@ -108,7 +108,10 @@ export class TelegramAdapter implements ChannelAdapter {
       this.bot.api.setMyCommands(commands, { scope: { type: "all_group_chats" } }),
     );
 
-    this.startPollingWithRetry();
+    // Wait for username to be populated before resolving
+    await new Promise<void>((resolve) => {
+      this.startPollingWithRetry(() => resolve());
+    });
   }
 
   /**
@@ -140,7 +143,7 @@ export class TelegramAdapter implements ChannelAdapter {
     return undefined;
   }
 
-  private startPollingWithRetry(): void {
+  private startPollingWithRetry(onUsernameReady?: () => void): void {
     if (this.stopped) return;
 
     this.bot.start({
@@ -148,6 +151,7 @@ export class TelegramAdapter implements ChannelAdapter {
       onStart: (info) => {
         this.username = info.username;
         this.log.info({ username: info.username }, "Telegram bot started polling");
+        onUsernameReady?.();
       },
     }).catch((err) => {
       if (this.stopped) return;
