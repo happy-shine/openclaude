@@ -509,7 +509,7 @@ export class BotInstance {
 
     // Advance this session's cursor past all messages (including our own replies)
     if (msg.isGroup) {
-      const latest = this.messageStore.getRecent(msg.chatId, 1);
+      const latest = this.messageStore.getRecent(msg.chatId, msg.threadId, 1);
       if (latest.length > 0) {
         this.messageStore.advanceCursor(session.sessionId, latest[0].id);
       }
@@ -980,8 +980,8 @@ function formatMessageWithMeta(msg: InboundMessage, sessionId?: string): string 
   // Prepend recent group chat context (with per-session dedup if sessionId available)
   if (msg.isGroup) {
     const groupContext = sessionId
-      ? getRecentGroupContextForSession(msg.chatId, sessionId, 20)
-      : getRecentGroupContext(msg.chatId, 20);
+      ? getRecentGroupContextForSession(msg.chatId, msg.threadId, sessionId, 20)
+      : getRecentGroupContext(msg.chatId, msg.threadId, 20);
     if (groupContext) {
       lines.push("--- Recent group chat context ---");
       lines.push(groupContext);
