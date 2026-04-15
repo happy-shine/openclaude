@@ -1,6 +1,7 @@
 export interface Session {
   sessionId: string;
   chatId: string;
+  threadId?: string;
   channelType: string;
   claudeSessionId?: string;
   createdAt: number;
@@ -13,6 +14,7 @@ export interface Session {
 
 export interface ChatSessionState {
   chatId: string;
+  threadId?: string;
   activeSessionId: string;
   sessions: Session[];
 }
