@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 
+// Force IPv4-first globally — avoids IPv6 ENETUNREACH causing connect timeout on dual-stack hosts
+import dns from "node:dns";
+import net from "node:net";
+dns.setDefaultResultOrder("ipv4first");
+net.setDefaultAutoSelectFamily(false);
+
 import { Command } from "commander";
 import pino from "pino";
 import { loadConfig, resolveBots } from "./config/loader.js";
