@@ -29,6 +29,7 @@ export interface Attachment {
 
 export interface OutboundMessage {
   chatId: string;
+  threadId?: string;
   text: string;
   parseMode?: "MarkdownV2" | "HTML";
   /** Original plain text used as fallback when parseMode rendering fails */
