@@ -21,6 +21,7 @@ Telegram ←→ OpenClaude Gateway ←→ Claude Code CLI（子进程）
 - **内联按钮** — 会话选择器和选项以可点击的 Telegram 按钮形式呈现，过期按钮自动清除
 - **访问控制** — 白名单 + 配对码流程，支持私聊和群组。陌生人无法使用你的 Bot
 - **群聊支持** — 响应 @提及和回复；完整消息记录（包括 Bot 回复）带发言人、时间戳上下文注入 Claude
+- **超级群组 Topics** — 每个 Topic 作为独立对话，拥有独立的会话和工作区
 - **文件共享** — 向 Claude 上传文件，Claude 也可以发文件给你；回复附件自动转发。Claude 还能通过聊天记录找回之前发送的文件
 - **SOUL.md 人格定制** — 每个 Bot 可自定义人格，Claude 甚至可以根据用户指令自行修改 SOUL.md
 - **实时进度** — 脉冲状态指示器显示 Claude 正在做什么（思考、读写文件、执行命令等）
@@ -209,6 +210,23 @@ openclaude bot list
 在群聊中，OpenClaude 会将所有消息（包括 Bot 回复）记录到持久化的聊天历史中。Claude 可以通过本地 HTTP 端点查询历史记录，了解过去的对话上下文。
 
 群组可以通过配对码审批（Bot 发码，管理员审批）或在 `config.yaml` 中预配置。
+
+### 超级群组 Topics
+
+对于开启了 Topics 功能的 Telegram 超级群组，每个 Topic 会自动隔离——独立的会话、工作区和消息历史。
+
+```yaml
+bots:
+  - name: "mybot"
+    token: "123456:ABC-DEF..."
+    auth:
+      groupPolicy: "allowlist"
+      groups:
+        "-1001234567890":    # 超级群组 ID
+          enabled: true
+```
+
+无需额外配置，Topics 通过 `message_thread_id` 自动检测。
 
 ## SOUL.md — Bot 人格定制
 
