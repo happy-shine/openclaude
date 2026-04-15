@@ -81,6 +81,7 @@ export class ApiServer {
     const chatId = url.searchParams.get("chat_id");
     const filePath = url.searchParams.get("file_path");
     const botId = url.searchParams.get("bot_id");
+    const threadId = url.searchParams.get("thread_id") || undefined;
 
     if (!chatId || !filePath) {
       res.writeHead(400, { "Content-Type": "application/json" });
@@ -102,9 +103,9 @@ export class ApiServer {
     const photoExts = ["jpg", "jpeg", "png", "gif", "webp"];
 
     if (photoExts.includes(ext)) {
-      await telegram.sendPhoto(chatId, filePath);
+      await telegram.sendPhoto(chatId, filePath, undefined, undefined, threadId);
     } else {
-      await telegram.sendDocument(chatId, filePath);
+      await telegram.sendDocument(chatId, filePath, undefined, undefined, threadId);
     }
 
     this.log.info({ chatId, filePath }, "Sent file to Telegram");
@@ -269,6 +270,7 @@ export class ApiServer {
     }
 
     const chatId = url.searchParams.get("chat_id");
+    const threadId = url.searchParams.get("thread_id") || undefined;
     if (!chatId) {
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Missing chat_id" }));
@@ -289,7 +291,7 @@ export class ApiServer {
     const sender = url.searchParams.get("sender") ?? undefined;
     const search = url.searchParams.get("search") ?? undefined;
 
-    const messages = store.query({ chatId, since, until, limit, sender, search });
+    const messages = store.query({ chatId, threadId, since, until, limit, sender, search });
 
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, count: messages.length, messages }));
