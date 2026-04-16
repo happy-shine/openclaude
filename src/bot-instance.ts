@@ -12,6 +12,7 @@ import { checkAccess } from "./auth/access.js";
 import { PairingManager } from "./auth/pairing.js";
 import { splitMessage, toMarkdownV2 } from "./channels/telegram/formatter.js";
 import { ProgressTracker, getToolDetail } from "./progress.js";
+import { getSessionKey } from "./utils/keys.js";
 import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 
@@ -311,19 +312,20 @@ export class BotInstance {
   // --- Chat queue ---
 
   private async enqueueChat(msg: InboundMessage): Promise<void> {
-    const chatId = msg.chatId;
-    const prev = this.chatQueues.get(chatId) ?? Promise.resolve();
+    // Use chatId:threadId as queue key to allow parallel processing across topics
+    const queueKey = getSessionKey(msg.chatId, msg.threadId);
+    const prev = this.chatQueues.get(queueKey) ?? Promise.resolve();
     const next = prev
       .then(() => this.handleMessage(msg))
       .catch((err) => {
         this.log.error(
-          { error: err instanceof Error ? err.message : String(err), chatId },
+          { error: err instanceof Error ? err.message : String(err), chatId: msg.chatId, threadId: msg.threadId },
           "Message handler error",
         );
       });
-    this.chatQueues.set(chatId, next);
+    this.chatQueues.set(queueKey, next);
     next.finally(() => {
-      if (this.chatQueues.get(chatId) === next) this.chatQueues.delete(chatId);
+      if (this.chatQueues.get(queueKey) === next) this.chatQueues.delete(queueKey);
     });
   }
 
@@ -353,10 +355,11 @@ export class BotInstance {
 
     await this.telegram.sendTyping(msg.chatId, msg.threadId);
 
-    // Remove stale inline buttons from previous message
-    const prevBtnMsg = this.lastButtonMsg.get(msg.chatId);
+    // Remove stale inline buttons from previous message (per topic)
+    const buttonKey = getSessionKey(msg.chatId, msg.threadId);
+    const prevBtnMsg = this.lastButtonMsg.get(buttonKey);
     if (prevBtnMsg) {
-      this.lastButtonMsg.delete(msg.chatId);
+      this.lastButtonMsg.delete(buttonKey);
       this.telegram.removeButtons(msg.chatId, prevBtnMsg).catch(() => {});
     }
 
@@ -471,7 +474,7 @@ export class BotInstance {
               const btnMsgId = await this.telegram.sendWithButtons(
                 msg.chatId, chunks[0], buttons, msg.messageId, "MarkdownV2", plainChunks[0],
               );
-              this.lastButtonMsg.set(msg.chatId, btnMsgId);
+              this.lastButtonMsg.set(getSessionKey(msg.chatId, msg.threadId), btnMsgId);
               this.telegram.notifyOutbound(msg.chatId, cleanText, btnMsgId);
               for (let ci = 1; ci < chunks.length; ci++) {
                 await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text: chunks[ci], parseMode: "MarkdownV2", plainFallback: plainChunks[ci] });
