@@ -12,6 +12,7 @@
 
 import { mkdirSync, appendFileSync, readFileSync, existsSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
+import { getStorageKey } from "../utils/keys.js";
 
 export interface StoredMessage {
   /** Telegram message_id (unique within chat) */
@@ -30,6 +31,7 @@ export interface StoredMessage {
 
 export interface MessageQueryOptions {
   chatId: string;
+  threadId?: string;
   /** Start time (epoch ms) */
   since?: number;
   /** End time (epoch ms) */
@@ -58,15 +60,15 @@ export class MessageStore {
   }
 
   /** Append a message to the chat's JSONL file */
-  append(chatId: string, msg: StoredMessage): void {
-    const filePath = this.chatFile(chatId);
+  append(chatId: string, threadId: string | undefined, msg: StoredMessage): void {
+    const filePath = this.chatFile(chatId, threadId);
     const line = JSON.stringify(msg) + "\n";
     appendFileSync(filePath, line, "utf-8");
   }
 
   /** Query messages with filters */
   query(opts: MessageQueryOptions): StoredMessage[] {
-    const filePath = this.chatFile(opts.chatId);
+    const filePath = this.chatFile(opts.chatId, opts.threadId);
     if (!existsSync(filePath)) return [];
 
     const raw = readFileSync(filePath, "utf-8");
@@ -109,8 +111,8 @@ export class MessageStore {
   }
 
   /** Get recent messages for passive context injection (last N messages) */
-  getRecent(chatId: string, count: number): StoredMessage[] {
-    const filePath = this.chatFile(chatId);
+  getRecent(chatId: string, threadId: string | undefined, count: number): StoredMessage[] {
+    const filePath = this.chatFile(chatId, threadId);
     if (!existsSync(filePath)) return [];
 
     const raw = readFileSync(filePath, "utf-8");
@@ -134,8 +136,8 @@ export class MessageStore {
    * Returns only messages newer than the session's last seen message.
    * Falls back to last `fallback` messages if no cursor exists yet.
    */
-  getRecentSince(chatId: string, sessionId: string, fallback: number): StoredMessage[] {
-    const filePath = this.chatFile(chatId);
+  getRecentSince(chatId: string, threadId: string | undefined, sessionId: string, fallback: number): StoredMessage[] {
+    const filePath = this.chatFile(chatId, threadId);
     if (!existsSync(filePath)) return [];
 
     const raw = readFileSync(filePath, "utf-8");
@@ -177,8 +179,8 @@ export class MessageStore {
   }
 
   /** Compact a chat file: keep only last N messages (run periodically) */
-  compact(chatId: string, keepLast: number = 5000): void {
-    const filePath = this.chatFile(chatId);
+  compact(chatId: string, threadId: string | undefined, keepLast: number = 5000): void {
+    const filePath = this.chatFile(chatId, threadId);
     if (!existsSync(filePath)) return;
 
     const raw = readFileSync(filePath, "utf-8");
@@ -192,8 +194,8 @@ export class MessageStore {
     renameSync(tmp, filePath);
   }
 
-  private chatFile(chatId: string): string {
-    const safe = chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    return join(this.dir, `${safe}.jsonl`);
+  private chatFile(chatId: string, threadId?: string): string {
+    const key = getStorageKey(chatId, threadId);
+    return join(this.dir, `${key}.jsonl`);
   }
 }

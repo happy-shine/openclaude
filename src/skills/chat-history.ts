@@ -2,7 +2,8 @@
  * Generates the system prompt skill that teaches Claude Code how to query
  * group chat history via the Gateway API.
  */
-export function getChatHistorySkill(apiPort: number, chatId: string): string {
+export function getChatHistorySkill(apiPort: number, chatId: string, threadId: string | undefined): string {
+  const threadParam = threadId ? `&thread_id=${threadId}` : "";
   return `
 ## Reading Group Chat History
 
@@ -11,7 +12,7 @@ You can query the full group chat history to understand context, summarize discu
 ### Query chat history
 
 \`\`\`bash
-curl -s "http://127.0.0.1:${apiPort}/api/chat-history?chat_id=${chatId}&since=2h&limit=100"
+curl -s "http://127.0.0.1:${apiPort}/api/chat-history?chat_id=${chatId}${threadParam}&since=2h&limit=100"
 \`\`\`
 
 ### Parameters
@@ -19,6 +20,7 @@ curl -s "http://127.0.0.1:${apiPort}/api/chat-history?chat_id=${chatId}&since=2h
 | Parameter | Description | Examples |
 |-----------|-------------|---------|
 | \`chat_id\` | Chat ID (pre-filled) | \`${chatId}\` |
+| \`thread_id\` | Topic/thread ID (optional) | If specified, limits query to this thread |
 | \`since\` | Start time | \`30m\`, \`2h\`, \`1d\`, \`7d\`, \`2026-04-07\`, \`yesterday\` |
 | \`until\` | End time | \`now\`, \`today\`, \`2026-04-08\` |
 | \`limit\` | Max messages (default 100) | \`50\`, \`200\`, \`500\` |
@@ -27,10 +29,10 @@ curl -s "http://127.0.0.1:${apiPort}/api/chat-history?chat_id=${chatId}&since=2h
 
 ### Common use cases
 
-- Summarize recent chat: \`?chat_id=${chatId}&since=2h\`
-- What did someone say: \`?chat_id=${chatId}&since=1d&sender=á\`
-- Find discussion about topic: \`?chat_id=${chatId}&since=7d&search=量化\`
-- Yesterday's full chat: \`?chat_id=${chatId}&since=yesterday&until=today\`
+- Summarize recent chat: \`?chat_id=${chatId}${threadParam}&since=2h\`
+- What did someone say: \`?chat_id=${chatId}${threadParam}&since=1d&sender=á\`
+- Find discussion about topic: \`?chat_id=${chatId}${threadParam}&since=7d&search=量化\`
+- Yesterday's full chat: \`?chat_id=${chatId}${threadParam}&since=yesterday&until=today\`
 
 ### Response format
 

@@ -9,6 +9,7 @@ import { getTelegramFileSkill } from "../skills/telegram-file.js";
 import { getSoulEditorSkill } from "../skills/soul-editor.js";
 import { getButtonSkill } from "../skills/telegram-buttons.js";
 import { getChatHistorySkill } from "../skills/chat-history.js";
+import { getStorageKey } from "../utils/keys.js";
 
 export interface ProcessManagerConfig {
   binary: string;
@@ -41,14 +42,12 @@ export class ProcessManager {
       this.evictOldest();
     }
 
-    // Build per-session workspace: {workspaceDir}/{botId}/{chatId}_{sessionId}
-    // Uses the gateway's own sessionId (stable from creation, never changes).
-    // claudeSessionId mapping lives in sessions/state.json — no need to encode it in the path.
-    const safeChatId = session.chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    // Build per-topic workspace: {workspaceDir}/{botId}/{storageKey}
+    // All sessions in the same topic share the same workspace directory.
     const sessionDir = join(
       this.config.workspaceDir,
       botId,
-      `${safeChatId}_${session.sessionId}`,
+      getStorageKey(session.chatId, session.threadId),
     );
     mkdirSync(sessionDir, { recursive: true });
 
@@ -67,11 +66,11 @@ export class ProcessManager {
     }
 
     // Built-in skills
-    parts.push(getTelegramFileSkill(this.config.apiPort, session.chatId, botId, session.isGroup ?? false));
+    parts.push(getTelegramFileSkill(this.config.apiPort, session.chatId, session.threadId, botId, session.isGroup ?? false));
     parts.push(getSoulEditorSkill(this.config.apiPort, botId));
     parts.push(getButtonSkill());
     if (session.isGroup) {
-      parts.push(getChatHistorySkill(this.config.apiPort, session.chatId));
+      parts.push(getChatHistorySkill(this.config.apiPort, session.chatId, session.threadId));
     }
 
     // Use per-bot extraArgs if provided, otherwise fall back to config defaults
@@ -287,8 +286,7 @@ export class ProcessManager {
     if (!session.claudeSessionId) return;
 
     // Must match the main process's cwd for --resume to find the session
-    const safeChatId = session.chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const cwd = join(this.config.workspaceDir, botId, `${safeChatId}_${session.sessionId}`);
+    const cwd = join(this.config.workspaceDir, botId, getStorageKey(session.chatId, session.threadId));
     mkdirSync(cwd, { recursive: true });
 
     const args = [

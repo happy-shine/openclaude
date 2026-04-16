@@ -195,7 +195,7 @@ export class Gateway {
     }
 
     for (const sourceBot of this.bots.values()) {
-      sourceBot.telegram.onOutbound((chatId, text, messageId) => {
+      sourceBot.telegram.onOutbound((chatId, text, messageId, threadId) => {
         // Only relay in group chats
         if (!chatId.startsWith("-")) return;
 
@@ -215,13 +215,14 @@ export class Gateway {
           if (!cleanText) continue;
 
           this.log.info(
-            { from: sourceBot.name, to: targetBot.name, chatId },
+            { from: sourceBot.name, to: targetBot.name, chatId, threadId },
             "Relaying bot-to-bot message",
           );
 
           targetBot.relayMessage({
             channelType: "telegram",
             chatId,
+            threadId,
             senderId: sourceBot.botId,
             senderName: sourceBot.name,
             messageId,
@@ -242,10 +243,15 @@ export class Gateway {
       const username = bot.telegram.username;
       if (username) {
         allBots.push({ botId: bot.botId, name: bot.name, username });
+      } else {
+        this.log.warn({ botId: bot.botId, botName: bot.name }, "Bot has no username, skipping peer setup");
       }
     }
+    this.log.info({ allBots: allBots.map(b => b.username) }, "Setting up peer bots");
     for (const bot of this.bots.values()) {
-      bot.setPeerBots(allBots.filter(b => b.botId !== bot.botId));
+      const peers = allBots.filter(b => b.botId !== bot.botId);
+      this.log.info({ botName: bot.name, peers: peers.map(p => p.username) }, "Peer bots for this bot");
+      bot.setPeerBots(peers);
     }
   }
 

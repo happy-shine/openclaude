@@ -73,3 +73,52 @@ describe("SessionManager", () => {
     expect(updated.claudeSessionId).toBe("claude-123");
   });
 });
+
+describe("SessionManager with threadId", () => {
+  let mgr: SessionManager;
+
+  beforeEach(() => {
+    mgr = new SessionManager();
+  });
+
+  it("isolates sessions by threadId", () => {
+    const s1 = mgr.resolve("chat1", "telegram", true, "thread1");
+    const s2 = mgr.resolve("chat1", "telegram", true, "thread2");
+    expect(s1.sessionId).not.toBe(s2.sessionId);
+    expect(s1.threadId).toBe("thread1");
+    expect(s2.threadId).toBe("thread2");
+  });
+
+  it("returns same session for same chatId+threadId", () => {
+    const s1 = mgr.resolve("chat1", "telegram", true, "thread1");
+    const s2 = mgr.resolve("chat1", "telegram", true, "thread1");
+    expect(s1.sessionId).toBe(s2.sessionId);
+  });
+
+  it("lists only sessions for specific threadId", () => {
+    mgr.resolve("chat1", "telegram", true, "thread1");
+    mgr.createNew("chat1", "thread1");
+    mgr.resolve("chat1", "telegram", true, "thread2");
+
+    const thread1Sessions = mgr.list("chat1", "thread1");
+    const thread2Sessions = mgr.list("chat1", "thread2");
+
+    expect(thread1Sessions).toHaveLength(2);
+    expect(thread2Sessions).toHaveLength(1);
+  });
+
+  it("switches sessions within same threadId", () => {
+    mgr.resolve("chat1", "telegram", true, "thread1");
+    mgr.createNew("chat1", "thread1");
+    const switched = mgr.switchTo("chat1", 1, "thread1");
+    expect(switched).not.toBeNull();
+    expect(switched!.threadId).toBe("thread1");
+  });
+
+  it("returns null when switching in wrong threadId", () => {
+    mgr.resolve("chat1", "telegram", true, "thread1");
+    mgr.createNew("chat1", "thread1");
+    const switched = mgr.switchTo("chat1", 1, "thread2");
+    expect(switched).toBeNull();
+  });
+});
