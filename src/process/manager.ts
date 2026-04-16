@@ -9,6 +9,7 @@ import { getTelegramFileSkill } from "../skills/telegram-file.js";
 import { getSoulEditorSkill } from "../skills/soul-editor.js";
 import { getButtonSkill } from "../skills/telegram-buttons.js";
 import { getChatHistorySkill } from "../skills/chat-history.js";
+import { getTelegramFormatSkill } from "../skills/telegram-format.js";
 
 export interface ProcessManagerConfig {
   binary: string;
@@ -70,6 +71,7 @@ export class ProcessManager {
     parts.push(getTelegramFileSkill(this.config.apiPort, session.chatId, botId, session.isGroup ?? false));
     parts.push(getSoulEditorSkill(this.config.apiPort, botId));
     parts.push(getButtonSkill());
+    parts.push(getTelegramFormatSkill());
     if (session.isGroup) {
       parts.push(getChatHistorySkill(this.config.apiPort, session.chatId));
     }

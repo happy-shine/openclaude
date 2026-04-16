@@ -1,18 +1,4 @@
-import { convert } from "telegram-markdown-v2";
-
 const TELEGRAM_MAX_LENGTH = 4096;
-
-/**
- * Convert standard Markdown to Telegram MarkdownV2.
- * Falls back to escaping all special chars if the converter throws.
- */
-export function toMarkdownV2(text: string): string {
-  try {
-    return convert(text);
-  } catch {
-    return escapeMarkdownV2(text);
-  }
-}
 
 export function splitMessage(text: string, maxLength = TELEGRAM_MAX_LENGTH): string[] {
   if (text.length <= maxLength) return [text];
@@ -41,6 +27,16 @@ export function splitMessage(text: string, maxLength = TELEGRAM_MAX_LENGTH): str
   return chunks;
 }
 
-export function escapeMarkdownV2(text: string): string {
-  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+/**
+ * Strip Telegram HTML tags and decode &lt; &gt; &amp; &quot; entities.
+ * Used as plainFallback when HTML parse fails — gives the user readable text
+ * instead of raw markup.
+ */
+export function stripHtml(text: string): string {
+  return text
+    .replace(/<\/?[a-zA-Z][^>]*>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
 }

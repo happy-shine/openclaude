@@ -10,7 +10,7 @@ import { SessionStore } from "./sessions/store.js";
 import { ProcessManager } from "./process/manager.js";
 import { checkAccess } from "./auth/access.js";
 import { PairingManager } from "./auth/pairing.js";
-import { splitMessage, toMarkdownV2 } from "./channels/telegram/formatter.js";
+import { splitMessage, stripHtml } from "./channels/telegram/formatter.js";
 import { ProgressTracker, getToolDetail } from "./progress.js";
 import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
@@ -453,36 +453,34 @@ export class BotInstance {
           if (finalText.length > 0) {
             const { text: cleanText, buttons } = extractButtons(finalText);
             const progressMsgId = progress.getMessageId();
-            const mdv2 = toMarkdownV2(cleanText);
-            const chunks = splitMessage(mdv2);
-
-            const plainChunks = splitMessage(cleanText);
+            const chunks = splitMessage(cleanText);
+            const plainChunks = chunks.map(stripHtml);
 
             if (buttons.length > 0) {
               if (progressMsgId) {
                 await this.telegram.deleteMessage(msg.chatId, progressMsgId);
               }
               const btnMsgId = await this.telegram.sendWithButtons(
-                msg.chatId, chunks[0], buttons, msg.messageId, "MarkdownV2", plainChunks[0],
+                msg.chatId, chunks[0], buttons, msg.messageId, "HTML", plainChunks[0],
               );
               this.lastButtonMsg.set(msg.chatId, btnMsgId);
               this.telegram.notifyOutbound(msg.chatId, cleanText, btnMsgId);
               for (let ci = 1; ci < chunks.length; ci++) {
-                await this.telegram.send({ chatId: msg.chatId, text: chunks[ci], parseMode: "MarkdownV2", plainFallback: plainChunks[ci] });
+                await this.telegram.send({ chatId: msg.chatId, text: chunks[ci], parseMode: "HTML", plainFallback: plainChunks[ci] });
               }
             } else if (progressMsgId) {
-              await this.telegram.editMessage(msg.chatId, progressMsgId, chunks[0], undefined, "MarkdownV2", plainChunks[0]);
+              await this.telegram.editMessage(msg.chatId, progressMsgId, chunks[0], undefined, "HTML", plainChunks[0]);
               // Trigger relay for the final edited content
               this.telegram.notifyOutbound(msg.chatId, cleanText, progressMsgId);
               for (let ci = 1; ci < chunks.length; ci++) {
-                await this.telegram.send({ chatId: msg.chatId, text: chunks[ci], parseMode: "MarkdownV2", plainFallback: plainChunks[ci] });
+                await this.telegram.send({ chatId: msg.chatId, text: chunks[ci], parseMode: "HTML", plainFallback: plainChunks[ci] });
               }
             } else {
               for (let i = 0; i < chunks.length; i++) {
                 await this.telegram.send({
                   chatId: msg.chatId,
                   text: chunks[i],
-                  parseMode: "MarkdownV2",
+                  parseMode: "HTML",
                   plainFallback: plainChunks[i],
                   ...(i === 0 ? { replyToMessageId: msg.messageId } : {}),
                 });
@@ -617,20 +615,19 @@ export class BotInstance {
 
           if (finalText.length > 0) {
             const progressMsgId = progress.getMessageId();
-            const mdv2 = toMarkdownV2(finalText);
-            const chunks = splitMessage(mdv2);
-            const plainChunks = splitMessage(finalText);
+            const chunks = splitMessage(finalText);
+            const plainChunks = chunks.map(stripHtml);
             if (progressMsgId) {
-              await this.telegram.editMessage(msg.chatId, progressMsgId, chunks[0], undefined, "MarkdownV2", plainChunks[0]);
+              await this.telegram.editMessage(msg.chatId, progressMsgId, chunks[0], undefined, "HTML", plainChunks[0]);
               for (let ci = 1; ci < chunks.length; ci++) {
-                await this.telegram.send({ chatId: msg.chatId, text: chunks[ci], parseMode: "MarkdownV2", plainFallback: plainChunks[ci] });
+                await this.telegram.send({ chatId: msg.chatId, text: chunks[ci], parseMode: "HTML", plainFallback: plainChunks[ci] });
               }
             } else {
               for (let i = 0; i < chunks.length; i++) {
                 await this.telegram.send({
                   chatId: msg.chatId,
                   text: chunks[i],
-                  parseMode: "MarkdownV2",
+                  parseMode: "HTML",
                   plainFallback: plainChunks[i],
                   ...(i === 0 ? { replyToMessageId: msg.messageId } : {}),
                 });
