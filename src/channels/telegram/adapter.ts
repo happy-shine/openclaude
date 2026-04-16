@@ -20,7 +20,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private stopped = false;
   private messageStore?: MessageStore;
   private botName: string;
-  private outboundCallback?: (chatId: string, text: string, messageId: string) => void;
+  private outboundCallback?: (chatId: string, text: string, messageId: string, threadId?: string) => void;
   /** Bot username (e.g. "atri65535_bot"), populated after start() */
   username?: string;
 
@@ -38,11 +38,11 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /** Record an outbound message to the store and advance all session cursors for this chat */
-  private recordOutbound(chatId: string, messageId: string, text: string): void {
+  private recordOutbound(chatId: string, messageId: string, text: string, threadId?: string): void {
     if (!this.messageStore) return;
     // Only record for group chats (negative chat IDs in Telegram)
     if (!chatId.startsWith("-")) return;
-    this.messageStore.append(chatId, {
+    this.messageStore.append(chatId, threadId, {
       id: messageId,
       ts: Math.floor(Date.now() / 1000),
       sender: this.botName,
@@ -61,13 +61,13 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /** Register a callback for outbound messages (used by gateway for bot-to-bot relay) */
-  onOutbound(cb: (chatId: string, text: string, messageId: string) => void): void {
+  onOutbound(cb: (chatId: string, text: string, messageId: string, threadId?: string) => void): void {
     this.outboundCallback = cb;
   }
 
   /** Manually trigger the outbound callback (used after editMessage for final replies) */
-  notifyOutbound(chatId: string, text: string, messageId: string): void {
-    this.outboundCallback?.(chatId, text, messageId);
+  notifyOutbound(chatId: string, text: string, messageId: string, threadId?: string): void {
+    this.outboundCallback?.(chatId, text, messageId, threadId);
   }
 
   onCommand(command: string, handler: CommandHandler): void {
@@ -108,7 +108,10 @@ export class TelegramAdapter implements ChannelAdapter {
       this.bot.api.setMyCommands(commands, { scope: { type: "all_group_chats" } }),
     );
 
-    this.startPollingWithRetry();
+    // Wait for username to be populated before resolving
+    await new Promise<void>((resolve) => {
+      this.startPollingWithRetry(() => resolve());
+    });
   }
 
   /**
@@ -140,7 +143,7 @@ export class TelegramAdapter implements ChannelAdapter {
     return undefined;
   }
 
-  private startPollingWithRetry(): void {
+  private startPollingWithRetry(onUsernameReady?: () => void): void {
     if (this.stopped) return;
 
     this.bot.start({
@@ -148,6 +151,7 @@ export class TelegramAdapter implements ChannelAdapter {
       onStart: (info) => {
         this.username = info.username;
         this.log.info({ username: info.username }, "Telegram bot started polling");
+        onUsernameReady?.();
       },
     }).catch((err) => {
       if (this.stopped) return;
@@ -178,11 +182,13 @@ export class TelegramAdapter implements ChannelAdapter {
         ? { reply_parameters: { message_id: Number(msg.replyToMessageId) } }
         : {};
       const parseOpts = msg.parseMode ? { parse_mode: msg.parseMode as "MarkdownV2" | "HTML" } : {};
+      const threadOpts = msg.threadId ? { message_thread_id: Number(msg.threadId) } : {};
       let sent;
       try {
         sent = await this.bot.api.sendMessage(Number(msg.chatId), chunks[i], {
           ...parseOpts,
           ...replyOpts,
+          ...threadOpts,
         });
       } catch (err) {
         // Fallback to plain text on parse error
@@ -190,15 +196,15 @@ export class TelegramAdapter implements ChannelAdapter {
           this.log.warn({ parseMode: msg.parseMode }, "parse failed in send, falling back to plain text");
           const fallback = msg.plainFallback ?? msg.text;
           const fallbackChunks = splitMessage(fallback);
-          sent = await this.bot.api.sendMessage(Number(msg.chatId), (fallbackChunks[i] ?? fallback).slice(0, 4096), replyOpts);
+          sent = await this.bot.api.sendMessage(Number(msg.chatId), (fallbackChunks[i] ?? fallback).slice(0, 4096), { ...replyOpts, ...threadOpts });
         } else {
           throw err;
         }
       }
       lastMessageId = String(sent.message_id);
-      this.recordOutbound(msg.chatId, String(sent.message_id), chunks[i]);
+      this.recordOutbound(msg.chatId, String(sent.message_id), chunks[i], msg.threadId);
     }
-    this.outboundCallback?.(msg.chatId, msg.text, lastMessageId);
+    this.outboundCallback?.(msg.chatId, msg.text, lastMessageId, msg.threadId);
     return lastMessageId;
   }
 
@@ -232,23 +238,26 @@ export class TelegramAdapter implements ChannelAdapter {
     }
   }
 
-  async sendTyping(chatId: string): Promise<void> {
-    await this.bot.api.sendChatAction(Number(chatId), "typing");
+  async sendTyping(chatId: string, threadId?: string): Promise<void> {
+    const threadOpts = threadId ? { message_thread_id: Number(threadId) } : {};
+    await this.bot.api.sendChatAction(Number(chatId), "typing", threadOpts);
   }
 
   /** Send a photo from local path */
-  async sendPhoto(chatId: string, filePath: string, caption?: string, replyToMessageId?: string): Promise<void> {
+  async sendPhoto(chatId: string, filePath: string, caption?: string, replyToMessageId?: string, threadId?: string): Promise<void> {
     await this.bot.api.sendPhoto(Number(chatId), new InputFile(filePath), {
       caption,
       ...(replyToMessageId ? { reply_parameters: { message_id: Number(replyToMessageId) } } : {}),
+      ...(threadId ? { message_thread_id: Number(threadId) } : {}),
     });
   }
 
   /** Send a document from local path */
-  async sendDocument(chatId: string, filePath: string, caption?: string, replyToMessageId?: string): Promise<void> {
+  async sendDocument(chatId: string, filePath: string, caption?: string, replyToMessageId?: string, threadId?: string): Promise<void> {
     await this.bot.api.sendDocument(Number(chatId), new InputFile(filePath), {
       caption,
       ...(replyToMessageId ? { reply_parameters: { message_id: Number(replyToMessageId) } } : {}),
+      ...(threadId ? { message_thread_id: Number(threadId) } : {}),
     });
   }
 
@@ -273,12 +282,14 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 
   /** Send a message with a custom inline keyboard layout */
-  async sendWithKeyboard(chatId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>, parseMode?: "MarkdownV2" | "HTML", plainFallback?: string): Promise<string> {
+  async sendWithKeyboard(chatId: string, text: string, keyboard: Array<Array<{ text: string; callback_data: string }>>, parseMode?: "MarkdownV2" | "HTML", plainFallback?: string, threadId?: string): Promise<string> {
     const truncated = text.slice(0, 4096);
     const parseOpts = parseMode ? { parse_mode: parseMode } : {};
+    const threadOpts = threadId ? { message_thread_id: Number(threadId) } : {};
     try {
       const sent = await this.bot.api.sendMessage(Number(chatId), truncated, {
         ...parseOpts,
+        ...threadOpts,
         reply_markup: { inline_keyboard: keyboard },
       });
       return String(sent.message_id);
@@ -287,6 +298,7 @@ export class TelegramAdapter implements ChannelAdapter {
         this.log.warn({ parseMode }, "parse failed in sendWithKeyboard, falling back");
         const fallbackText = (plainFallback ?? text).slice(0, 4096);
         const sent = await this.bot.api.sendMessage(Number(chatId), fallbackText, {
+          ...threadOpts,
           reply_markup: { inline_keyboard: keyboard },
         });
         return String(sent.message_id);

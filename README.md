@@ -21,6 +21,7 @@ Each conversation spawns a real Claude Code process. Claude can read/write files
 - **Inline buttons** — session picker and choices rendered as tappable Telegram buttons; stale buttons auto-removed
 - **Access control** — allowlist + pairing code flow for both DMs and groups. No strangers can use your bot
 - **Group chat support** — responds to @mentions and replies; full message history (including bot replies) with sender/timestamp context injected into Claude
+- **Supergroup Topics** — each topic is treated as an independent chat with its own sessions and workspace
 - **File sharing** — upload files to Claude, Claude sends files back to you; reply attachments forwarded. Claude can also retrieve previously shared files via chat history
 - **SOUL.md personality** — customize your bot's personality per-bot. Claude can even edit its own SOUL via user instructions
 - **Live progress** — pulsing status indicator shows what Claude is doing (thinking, reading, writing, running commands)
@@ -209,6 +210,23 @@ Each bot knows which other bots are in the gateway and will only @mention them w
 In group chats, OpenClaude records all messages (including bot replies) to a persistent chat history. Claude can query this history via a local HTTP endpoint for context about past conversations.
 
 Groups can be authorized via pairing (bot sends a code, owner approves) or pre-configured in `config.yaml`.
+
+### Supergroup Topics
+
+For Telegram supergroups with Topics enabled, each topic is automatically isolated — separate sessions, workspace, and message history.
+
+```yaml
+bots:
+  - name: "mybot"
+    token: "123456:ABC-DEF..."
+    auth:
+      groupPolicy: "allowlist"
+      groups:
+        "-1001234567890":    # supergroup ID
+          enabled: true
+```
+
+No extra configuration needed. Topics are detected automatically via `message_thread_id`.
 
 ## SOUL.md — Bot Personality
 

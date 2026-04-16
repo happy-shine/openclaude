@@ -2,8 +2,9 @@
  * Generates the system prompt skill that teaches Claude how to send files
  * back to the Telegram user, and how to retrieve previously shared files.
  */
-export function getTelegramFileSkill(apiPort: number, chatId: string, botId: string, isGroup: boolean): string {
+export function getTelegramFileSkill(apiPort: number, chatId: string, threadId: string | undefined, botId: string, isGroup: boolean): string {
   const parts: string[] = [];
+  const threadParam = threadId ? `&thread_id=${threadId}` : "";
 
   parts.push(`
 ## Sending Files to User (Telegram Gateway)
@@ -16,16 +17,16 @@ When the user asks you to create a file and send it to them, or when you produce
 2. Send it to the user by running this curl command:
 
 \`\`\`bash
-curl -s -X POST "http://127.0.0.1:${apiPort}/api/send-file?chat_id=${chatId}&file_path=$(pwd)/FILENAME"
+curl -s -X POST "http://127.0.0.1:${apiPort}/api/send-file?chat_id=${chatId}${threadParam}&file_path=$(pwd)/FILENAME"
 \`\`\`
 
 Replace FILENAME with the actual file name. You MUST use the absolute path.
 
 Examples:
 - To send a Python file you just wrote:
-  \`curl -s -X POST "http://127.0.0.1:${apiPort}/api/send-file?chat_id=${chatId}&file_path=$(pwd)/quicksort.py"\`
+  \`curl -s -X POST "http://127.0.0.1:${apiPort}/api/send-file?chat_id=${chatId}${threadParam}&file_path=$(pwd)/quicksort.py"\`
 - To send an image:
-  \`curl -s -X POST "http://127.0.0.1:${apiPort}/api/send-file?chat_id=${chatId}&file_path=/absolute/path/to/image.png"\`
+  \`curl -s -X POST "http://127.0.0.1:${apiPort}/api/send-file?chat_id=${chatId}${threadParam}&file_path=/absolute/path/to/image.png"\`
 
 The API will return \`{"ok":true}\` on success.
 
@@ -41,7 +42,7 @@ When a user references a file they sent earlier (e.g. "my file above", "that doc
 2. **If not found, query chat history** to find the file_id:
 
 \`\`\`bash
-curl -s "http://127.0.0.1:${apiPort}/api/chat-history?chat_id=${chatId}&since=1d&limit=50"
+curl -s "http://127.0.0.1:${apiPort}/api/chat-history?chat_id=${chatId}${threadParam}&since=1d&limit=50"
 \`\`\`
 
 Look for entries with a \`media\` field. Media entries use the format:
@@ -61,7 +62,7 @@ Returns \`{"ok":true,"path":"/abs/path/to/downloaded/file"}\` on success. Then r
 User says: "What does that PDF I sent say?"
 
 1. Check \`downloads/\` for existing files
-2. If not found, query chat history: \`curl -s "http://127.0.0.1:${apiPort}/api/chat-history?chat_id=${chatId}&since=1d&search=PDF&limit=20"\`
+2. If not found, query chat history: \`curl -s "http://127.0.0.1:${apiPort}/api/chat-history?chat_id=${chatId}${threadParam}&since=1d&search=PDF&limit=20"\`
 3. Find the media entry: \`"media": ["document:BQACAgU....:report.pdf"]\`
 4. Download: \`curl -s -X POST "http://127.0.0.1:${apiPort}/api/download-file?bot_id=${botId}&file_id=BQACAgU....&dest_dir=$(pwd)/downloads"\`
 5. Read the downloaded file and answer the question`);

@@ -29,7 +29,7 @@ export function setMessageStore(store: MessageStore): void {
 }
 
 /** Record a group message — persists to MessageStore if available, otherwise no-op */
-function recordGroupMessage(chatId: string, msg: {
+function recordGroupMessage(chatId: string, threadId: string | undefined, msg: {
   messageId: string;
   senderName: string;
   senderId: string;
@@ -38,7 +38,7 @@ function recordGroupMessage(chatId: string, msg: {
   media?: string[];
 }): void {
   if (!messageStore) return;
-  messageStore.append(chatId, {
+  messageStore.append(chatId, threadId, {
     id: msg.messageId,
     ts: msg.timestamp,
     sender: msg.senderName,
@@ -49,9 +49,9 @@ function recordGroupMessage(chatId: string, msg: {
 }
 
 /** Get recent group messages formatted as context string (peek, not drain) */
-export function getRecentGroupContext(chatId: string, count: number = 20): string {
+export function getRecentGroupContext(chatId: string, threadId: string | undefined, count: number = 20): string {
   if (!messageStore) return "";
-  const messages = messageStore.getRecent(chatId, count);
+  const messages = messageStore.getRecent(chatId, threadId, count);
   if (messages.length === 0) return "";
   return formatMessages(messages);
 }
@@ -60,9 +60,9 @@ export function getRecentGroupContext(chatId: string, count: number = 20): strin
  * Get group context with per-session deduplication.
  * Only returns messages the session hasn't seen yet.
  */
-export function getRecentGroupContextForSession(chatId: string, sessionId: string, fallback: number = 20): string {
+export function getRecentGroupContextForSession(chatId: string, threadId: string | undefined, sessionId: string, fallback: number = 20): string {
   if (!messageStore) return "";
-  const messages = messageStore.getRecentSince(chatId, sessionId, fallback);
+  const messages = messageStore.getRecentSince(chatId, threadId, sessionId, fallback);
   if (messages.length === 0) return "";
   return formatMessages(messages);
 }
@@ -105,7 +105,7 @@ export function registerHandlers(
 
     if (msg.isGroup) {
       // Always record the original message for group chat history
-      recordGroupMessage(msg.chatId, {
+      recordGroupMessage(msg.chatId, msg.threadId, {
         messageId: msg.messageId,
         senderName: msg.senderName,
         senderId: msg.senderId,
@@ -136,7 +136,7 @@ export function registerHandlers(
       const photo = ctx.message.photo;
       const largest = photo[photo.length - 1];
       // Always record for group chat history
-      recordGroupMessage(msg.chatId, {
+      recordGroupMessage(msg.chatId, msg.threadId, {
         messageId: msg.messageId,
         senderName: msg.senderName,
         senderId: msg.senderId,
@@ -232,7 +232,7 @@ export function registerHandlers(
       const doc = ctx.message.document;
       const fileName = doc?.file_name;
       // Always record for group chat history
-      recordGroupMessage(msg.chatId, {
+      recordGroupMessage(msg.chatId, msg.threadId, {
         messageId: msg.messageId,
         senderName: msg.senderName,
         senderId: msg.senderId,

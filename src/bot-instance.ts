@@ -12,6 +12,7 @@ import { checkAccess } from "./auth/access.js";
 import { PairingManager } from "./auth/pairing.js";
 import { splitMessage, toMarkdownV2 } from "./channels/telegram/formatter.js";
 import { ProgressTracker, getToolDetail } from "./progress.js";
+import { getSessionKey } from "./utils/keys.js";
 import { join } from "node:path";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 
@@ -179,7 +180,8 @@ export class BotInstance {
       const chatId = parts[1];
       const index = parseInt(parts[2], 10);
       if (!chatId || isNaN(index)) return;
-      const switched = this.sessionManager.switchTo(chatId, index);
+      const threadId = (ctx as any).callbackQuery?.message?.message_thread_id?.toString();
+      const switched = this.sessionManager.switchTo(chatId, index, threadId);
       if (switched) {
         try {
           const orig = (ctx as any).callbackQuery?.message;
@@ -187,8 +189,8 @@ export class BotInstance {
             await (ctx as any).editMessageText(orig.text, { reply_markup: { inline_keyboard: [] } });
           }
         } catch { /* ignore */ }
-        await this.telegram.send({ chatId, text: `Switched to session #${index}: ${switched.title ?? "(untitled)"}` });
-        await this.sessionManager.flush(chatId);
+        await this.telegram.send({ chatId, threadId, text: `Switched to session #${index}: ${switched.title ?? "(untitled)"}` });
+        await this.sessionManager.flush(chatId, threadId);
       }
     });
 
@@ -198,11 +200,12 @@ export class BotInstance {
       const chatId = parts[1];
       const page = parseInt(parts[2], 10);
       if (!chatId || isNaN(page)) return;
+      const threadId = (ctx as any).callbackQuery?.message?.message_thread_id?.toString();
       const orig = (ctx as any).callbackQuery?.message;
       if (!orig) return;
       const messageId = String(orig.message_id);
       // Rebuild session list for the requested page (newest first)
-      const sessions = this.sessionManager.list(chatId).reverse();
+      const sessions = this.sessionManager.list(chatId, threadId).reverse();
       const perPage = SESSIONS_PER_PAGE;
       const totalPages = Math.ceil(sessions.length / perPage);
       const p = Math.max(0, Math.min(page, totalPages - 1));
@@ -239,19 +242,21 @@ export class BotInstance {
       const chat = (ctx as any).callbackQuery?.message?.chat;
       if (!chat) return;
       const chatId = String(chat.id);
+      const threadId = (ctx as any).callbackQuery?.message?.message_thread_id?.toString();
       try {
         const orig = (ctx as any).callbackQuery?.message;
         if (orig && "text" in orig) {
           await (ctx as any).editMessageText(`Model: ${value}`, { reply_markup: { inline_keyboard: [] } });
         }
       } catch { /* ignore */ }
-      const session = this.sessionManager.resolve(chatId, "telegram");
+      const isGroup = chat.type === "group" || chat.type === "supergroup";
+      const session = this.sessionManager.resolve(chatId, "telegram", isGroup, threadId);
       if (!this.processManager.hasProcess(session.sessionId)) {
-        await this.telegram.send({ chatId, text: `Model set to ${value}. Will apply on next message.` });
+        await this.telegram.send({ chatId, threadId, text: `Model set to ${value}. Will apply on next message.` });
         return;
       }
       const sent = this.processManager.sendControl(session.sessionId, { subtype: "set_model", model: value });
-      await this.telegram.send({ chatId, text: sent ? `Model switched to ${value}` : "No active process." });
+      await this.telegram.send({ chatId, threadId, text: sent ? `Model switched to ${value}` : "No active process." });
     });
 
     this.telegram.onCallback("effort", async (ctx) => {
@@ -261,22 +266,24 @@ export class BotInstance {
       const chat = (ctx as any).callbackQuery?.message?.chat;
       if (!chat) return;
       const chatId = String(chat.id);
+      const threadId = (ctx as any).callbackQuery?.message?.message_thread_id?.toString();
       try {
         const orig = (ctx as any).callbackQuery?.message;
         if (orig && "text" in orig) {
           await (ctx as any).editMessageText(`Effort: ${value}`, { reply_markup: { inline_keyboard: [] } });
         }
       } catch { /* ignore */ }
-      const session = this.sessionManager.resolve(chatId, "telegram");
+      const isGroup = chat.type === "group" || chat.type === "supergroup";
+      const session = this.sessionManager.resolve(chatId, "telegram", isGroup, threadId);
       if (!this.processManager.hasProcess(session.sessionId)) {
-        await this.telegram.send({ chatId, text: `Effort set to ${value}. Will apply on next message.` });
+        await this.telegram.send({ chatId, threadId, text: `Effort set to ${value}. Will apply on next message.` });
         return;
       }
       const sent = this.processManager.sendControl(session.sessionId, {
         subtype: "apply_flag_settings",
         settings: { effortLevel: value },
       });
-      await this.telegram.send({ chatId, text: sent ? `Effort set to ${value}` : "No active process." });
+      await this.telegram.send({ chatId, threadId, text: sent ? `Effort set to ${value}` : "No active process." });
     });
 
     this.telegram.onMessage((msg) => this.enqueueChat(msg));
@@ -305,19 +312,20 @@ export class BotInstance {
   // --- Chat queue ---
 
   private async enqueueChat(msg: InboundMessage): Promise<void> {
-    const chatId = msg.chatId;
-    const prev = this.chatQueues.get(chatId) ?? Promise.resolve();
+    // Use chatId:threadId as queue key to allow parallel processing across topics
+    const queueKey = getSessionKey(msg.chatId, msg.threadId);
+    const prev = this.chatQueues.get(queueKey) ?? Promise.resolve();
     const next = prev
       .then(() => this.handleMessage(msg))
       .catch((err) => {
         this.log.error(
-          { error: err instanceof Error ? err.message : String(err), chatId },
+          { error: err instanceof Error ? err.message : String(err), chatId: msg.chatId, threadId: msg.threadId },
           "Message handler error",
         );
       });
-    this.chatQueues.set(chatId, next);
+    this.chatQueues.set(queueKey, next);
     next.finally(() => {
-      if (this.chatQueues.get(chatId) === next) this.chatQueues.delete(chatId);
+      if (this.chatQueues.get(queueKey) === next) this.chatQueues.delete(queueKey);
     });
   }
 
@@ -339,18 +347,19 @@ export class BotInstance {
       return;
     }
 
-    const session = this.sessionManager.resolve(msg.chatId, msg.channelType, msg.isGroup);
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType, msg.isGroup, msg.threadId);
 
     if (!session.title && msg.text) {
       this.sessionManager.update(session.sessionId, { title: msg.text.slice(0, 50) });
     }
 
-    await this.telegram.sendTyping(msg.chatId);
+    await this.telegram.sendTyping(msg.chatId, msg.threadId);
 
-    // Remove stale inline buttons from previous message
-    const prevBtnMsg = this.lastButtonMsg.get(msg.chatId);
+    // Remove stale inline buttons from previous message (per topic)
+    const buttonKey = getSessionKey(msg.chatId, msg.threadId);
+    const prevBtnMsg = this.lastButtonMsg.get(buttonKey);
     if (prevBtnMsg) {
-      this.lastButtonMsg.delete(msg.chatId);
+      this.lastButtonMsg.delete(buttonKey);
       this.telegram.removeButtons(msg.chatId, prevBtnMsg).catch(() => {});
     }
 
@@ -465,22 +474,23 @@ export class BotInstance {
               const btnMsgId = await this.telegram.sendWithButtons(
                 msg.chatId, chunks[0], buttons, msg.messageId, "MarkdownV2", plainChunks[0],
               );
-              this.lastButtonMsg.set(msg.chatId, btnMsgId);
+              this.lastButtonMsg.set(getSessionKey(msg.chatId, msg.threadId), btnMsgId);
               this.telegram.notifyOutbound(msg.chatId, cleanText, btnMsgId);
               for (let ci = 1; ci < chunks.length; ci++) {
-                await this.telegram.send({ chatId: msg.chatId, text: chunks[ci], parseMode: "MarkdownV2", plainFallback: plainChunks[ci] });
+                await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text: chunks[ci], parseMode: "MarkdownV2", plainFallback: plainChunks[ci] });
               }
             } else if (progressMsgId) {
               await this.telegram.editMessage(msg.chatId, progressMsgId, chunks[0], undefined, "MarkdownV2", plainChunks[0]);
               // Trigger relay for the final edited content
               this.telegram.notifyOutbound(msg.chatId, cleanText, progressMsgId);
               for (let ci = 1; ci < chunks.length; ci++) {
-                await this.telegram.send({ chatId: msg.chatId, text: chunks[ci], parseMode: "MarkdownV2", plainFallback: plainChunks[ci] });
+                await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text: chunks[ci], parseMode: "MarkdownV2", plainFallback: plainChunks[ci] });
               }
             } else {
               for (let i = 0; i < chunks.length; i++) {
                 await this.telegram.send({
                   chatId: msg.chatId,
+                  threadId: msg.threadId,
                   text: chunks[i],
                   parseMode: "MarkdownV2",
                   plainFallback: plainChunks[i],
@@ -491,6 +501,7 @@ export class BotInstance {
           } else if (event.is_error) {
             await this.telegram.send({
               chatId: msg.chatId,
+              threadId: msg.threadId,
               text: `Error: ${event.result ?? "Unknown error"}`,
             });
           }
@@ -505,11 +516,11 @@ export class BotInstance {
     }
 
     this.sessionManager.update(session.sessionId, { lastActiveAt: Date.now() });
-    await this.sessionManager.flush(msg.chatId);
+    await this.sessionManager.flush(msg.chatId, msg.threadId);
 
     // Advance this session's cursor past all messages (including our own replies)
     if (msg.isGroup) {
-      const latest = this.messageStore.getRecent(msg.chatId, 1);
+      const latest = this.messageStore.getRecent(msg.chatId, msg.threadId, 1);
       if (latest.length > 0) {
         this.messageStore.advanceCursor(session.sessionId, latest[0].id);
       }
@@ -530,7 +541,7 @@ export class BotInstance {
       "Ask the bot owner to approve with:",
       `  openclaude pairing approve ${req.code} --bot ${this.config.name}`,
     ].join("\n");
-    await this.telegram.send({ chatId: msg.chatId, text });
+    await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text });
   }
 
   private async handleGroupPairingChallenge(msg: InboundMessage): Promise<void> {
@@ -550,7 +561,7 @@ export class BotInstance {
       "Ask the bot owner to approve with:",
       `  openclaude group approve ${req.code} --bot ${this.config.name}`,
     ].join("\n");
-    await this.telegram.send({ chatId: msg.chatId, text });
+    await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text });
   }
 
   private async handleBtw(msg: InboundMessage): Promise<void> {
@@ -559,14 +570,15 @@ export class BotInstance {
 
     const question = msg.text.trim();
     if (!question) {
-      await this.telegram.send({ chatId: msg.chatId, text: "Usage: /btw <question>" });
+      await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text: "Usage: /btw <question>" });
       return;
     }
 
-    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType, msg.isGroup, msg.threadId);
     if (!session.claudeSessionId) {
       await this.telegram.send({
         chatId: msg.chatId,
+        threadId: msg.threadId,
         text: "No active session to fork from. Send a message first.",
       });
       return;
@@ -623,12 +635,13 @@ export class BotInstance {
             if (progressMsgId) {
               await this.telegram.editMessage(msg.chatId, progressMsgId, chunks[0], undefined, "MarkdownV2", plainChunks[0]);
               for (let ci = 1; ci < chunks.length; ci++) {
-                await this.telegram.send({ chatId: msg.chatId, text: chunks[ci], parseMode: "MarkdownV2", plainFallback: plainChunks[ci] });
+                await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text: chunks[ci], parseMode: "MarkdownV2", plainFallback: plainChunks[ci] });
               }
             } else {
               for (let i = 0; i < chunks.length; i++) {
                 await this.telegram.send({
                   chatId: msg.chatId,
+                  threadId: msg.threadId,
                   text: chunks[i],
                   parseMode: "MarkdownV2",
                   plainFallback: plainChunks[i],
@@ -642,7 +655,7 @@ export class BotInstance {
             if (progressMsgId) {
               await this.telegram.editMessage(msg.chatId, progressMsgId, errText);
             } else {
-              await this.telegram.send({ chatId: msg.chatId, text: errText });
+              await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text: errText });
             }
           }
           break;
@@ -654,7 +667,7 @@ export class BotInstance {
       await progress.finish();
       const errMsg = err instanceof Error ? err.message : String(err);
       this.log.error({ error: errMsg }, "/btw failed");
-      await this.telegram.send({ chatId: msg.chatId, text: `btw error: ${errMsg}` });
+      await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text: `btw error: ${errMsg}` });
     } finally {
       progress.stop();
     }
@@ -664,14 +677,15 @@ export class BotInstance {
     const access = this.checkMessageAccess(msg);
     if (!access.allowed) return;
 
-    this.sessionManager.resolve(msg.chatId, msg.channelType);
-    this.sessionManager.createNew(msg.chatId);
-    const count = this.sessionManager.list(msg.chatId).length;
+    this.sessionManager.resolve(msg.chatId, msg.channelType, msg.isGroup, msg.threadId);
+    this.sessionManager.createNew(msg.chatId, msg.threadId);
+    const count = this.sessionManager.list(msg.chatId, msg.threadId).length;
     await this.telegram.send({
       chatId: msg.chatId,
+      threadId: msg.threadId,
       text: `New session started. (Session #${count})`,
     });
-    await this.sessionManager.flush(msg.chatId);
+    await this.sessionManager.flush(msg.chatId, msg.threadId);
   }
 
   private async handleSessionsCommand(msg: InboundMessage): Promise<void> {
@@ -679,19 +693,21 @@ export class BotInstance {
     if (!isNaN(index)) {
       const access = this.checkMessageAccess(msg);
       if (!access.allowed) return;
-      const switched = this.sessionManager.switchTo(msg.chatId, index);
+      const switched = this.sessionManager.switchTo(msg.chatId, index, msg.threadId);
       if (!switched) {
         await this.telegram.send({
           chatId: msg.chatId,
+          threadId: msg.threadId,
           text: `Session #${index} not found. Use /sessions to see available sessions.`,
         });
         return;
       }
       await this.telegram.send({
         chatId: msg.chatId,
+        threadId: msg.threadId,
         text: `Switched to session #${index}: ${switched.title ?? "(untitled)"}`,
       });
-      await this.sessionManager.flush(msg.chatId);
+      await this.sessionManager.flush(msg.chatId, msg.threadId);
       return;
     }
     await this.handleListSessions(msg);
@@ -701,9 +717,9 @@ export class BotInstance {
     const access = this.checkMessageAccess(msg);
     if (!access.allowed) return;
 
-    const sessions = this.sessionManager.list(msg.chatId).reverse();
+    const sessions = this.sessionManager.list(msg.chatId, msg.threadId).reverse();
     if (sessions.length === 0) {
-      await this.telegram.send({ chatId: msg.chatId, text: "No sessions yet." });
+      await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text: "No sessions yet." });
       return;
     }
 
@@ -735,7 +751,7 @@ export class BotInstance {
       buttonRows.push(navRow);
     }
 
-    await this.telegram.sendWithKeyboard(msg.chatId, text, buttonRows);
+    await this.telegram.sendWithKeyboard(msg.chatId, text, buttonRows, undefined, undefined, msg.threadId);
   }
 
   private async handleHelp(msg: InboundMessage): Promise<void> {
@@ -751,7 +767,7 @@ export class BotInstance {
       "/title [text] \u2014 Set session title (empty = auto-generate)",
       "/help \u2014 Show this help",
     ].join("\n");
-    await this.telegram.send({ chatId: msg.chatId, text });
+    await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text });
   }
 
   private async handleModel(msg: InboundMessage): Promise<void> {
@@ -777,15 +793,16 @@ export class BotInstance {
       return;
     }
 
-    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType, msg.isGroup, msg.threadId);
     if (!this.processManager.hasProcess(session.sessionId)) {
-      await this.telegram.send({ chatId: msg.chatId, text: `Model set to ${model}. Will apply on next message.` });
+      await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text: `Model set to ${model}. Will apply on next message.` });
       return;
     }
 
     const sent = this.processManager.sendControl(session.sessionId, { subtype: "set_model", model });
     await this.telegram.send({
       chatId: msg.chatId,
+      threadId: msg.threadId,
       text: sent ? `Model switched to ${model}` : "No active process. Send a message first.",
     });
   }
@@ -805,9 +822,9 @@ export class BotInstance {
       return;
     }
 
-    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType, msg.isGroup, msg.threadId);
     if (!this.processManager.hasProcess(session.sessionId)) {
-      await this.telegram.send({ chatId: msg.chatId, text: `Effort set to ${level}. Will apply on next message.` });
+      await this.telegram.send({ chatId: msg.chatId, threadId: msg.threadId, text: `Effort set to ${level}. Will apply on next message.` });
       return;
     }
 
@@ -817,6 +834,7 @@ export class BotInstance {
     });
     await this.telegram.send({
       chatId: msg.chatId,
+      threadId: msg.threadId,
       text: sent ? `Effort set to ${level}` : "No active process. Send a message first.",
     });
   }
@@ -825,10 +843,11 @@ export class BotInstance {
     const access = this.checkMessageAccess(msg);
     if (!access.allowed) return;
 
-    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType, msg.isGroup, msg.threadId);
     const sent = this.processManager.sendControl(session.sessionId, { subtype: "interrupt" });
     await this.telegram.send({
       chatId: msg.chatId,
+      threadId: msg.threadId,
       text: sent ? "Interrupted." : "Nothing to interrupt.",
     });
   }
@@ -837,14 +856,15 @@ export class BotInstance {
     const access = this.checkMessageAccess(msg);
     if (!access.allowed) return;
 
-    const session = this.sessionManager.resolve(msg.chatId, msg.channelType);
+    const session = this.sessionManager.resolve(msg.chatId, msg.channelType, msg.isGroup, msg.threadId);
     const userTitle = msg.text.trim();
 
     if (userTitle) {
       this.sessionManager.update(session.sessionId, { title: userTitle.slice(0, 80) });
-      await this.sessionManager.flush(msg.chatId);
+      await this.sessionManager.flush(msg.chatId, msg.threadId);
       await this.telegram.send({
         chatId: msg.chatId,
+        threadId: msg.threadId,
         text: `Session #${session.sessionNum} title set to: "${userTitle.slice(0, 80)}"`,
       });
     } else {
@@ -870,13 +890,14 @@ export class BotInstance {
             await progress.finish();
             const title = generatedTitle.trim().replace(/^["']|["']$/g, "").slice(0, 80) || "(untitled)";
             this.sessionManager.update(session.sessionId, { title });
-            await this.sessionManager.flush(msg.chatId);
+            await this.sessionManager.flush(msg.chatId, msg.threadId);
             const progressMsgId = progress.getMessageId();
             if (progressMsgId) {
               await this.telegram.editMessage(msg.chatId, progressMsgId, `Session #${session.sessionNum} title: "${title}"`);
             } else {
               await this.telegram.send({
                 chatId: msg.chatId,
+                threadId: msg.threadId,
                 text: `Session #${session.sessionNum} title: "${title}"`,
               });
             }
@@ -980,8 +1001,8 @@ function formatMessageWithMeta(msg: InboundMessage, sessionId?: string): string 
   // Prepend recent group chat context (with per-session dedup if sessionId available)
   if (msg.isGroup) {
     const groupContext = sessionId
-      ? getRecentGroupContextForSession(msg.chatId, sessionId, 20)
-      : getRecentGroupContext(msg.chatId, 20);
+      ? getRecentGroupContextForSession(msg.chatId, msg.threadId, sessionId, 20)
+      : getRecentGroupContext(msg.chatId, msg.threadId, 20);
     if (groupContext) {
       lines.push("--- Recent group chat context ---");
       lines.push(groupContext);
