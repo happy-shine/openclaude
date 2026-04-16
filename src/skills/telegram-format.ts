@@ -11,16 +11,18 @@ Your final reply to the user is sent through Telegram with \`parse_mode=HTML\`. 
 
 | Tag | Use for |
 |-----|---------|
-| \`<b>text</b>\` | bold |
-| \`<i>text</i>\` | italic |
-| \`<u>text</u>\` | underline |
-| \`<s>text</s>\` | strikethrough |
+| \`<b>text</b>\` (alias: \`<strong>\`) | bold |
+| \`<i>text</i>\` (alias: \`<em>\`) | italic |
+| \`<u>text</u>\` (alias: \`<ins>\`) | underline |
+| \`<s>text</s>\` (aliases: \`<strike>\`, \`<del>\`) | strikethrough |
 | \`<code>text</code>\` | inline code (monospace, tap-to-copy) |
 | \`<pre>text</pre>\` | code block |
-| \`<pre><code class="language-python">text</code></pre>\` | code block with syntax hint |
+| \`<pre><code class="language-python">text</code></pre>\` | code block with syntax hint (language ONLY works on nested \`<code>\` inside \`<pre>\` — never on a standalone \`<code>\`) |
 | \`<a href="URL">text</a>\` | link |
+| \`<a href="tg://user?id=USER_ID">name</a>\` | mention a Telegram user by numeric id |
 | \`<tg-spoiler>text</tg-spoiler>\` | spoiler (hidden until tapped) |
 | \`<blockquote>text</blockquote>\` | quote block |
+| \`<blockquote expandable>text</blockquote>\` | collapsed-by-default quote (tap to expand — use for long quotes) |
 
 ### Escaping rules
 
@@ -29,7 +31,9 @@ Inside text content (between tags), escape these three characters:
 - \`>\` → \`&gt;\`
 - \`&\` → \`&amp;\`
 
-Inside \`<code>\` and \`<pre>\`, escape the same three. Everything else (including \`.\`, \`!\`, \`(\`, \`_\`, etc.) is literal — no escaping needed.
+Telegram also accepts \`&quot;\` as a named entity. Numeric entities (\`&#60;\` etc.) are supported but unnecessary — stick to the four named ones. Everything else (including \`.\`, \`!\`, \`(\`, \`_\`, etc.) is literal — no escaping needed.
+
+Inside \`<code>\` and \`<pre>\`, escape the same three characters. Tags inside \`<code>\`/\`<pre>\` are NOT parsed — so \`<pre>&lt;div&gt;</pre>\` correctly shows literal \`<div>\` in a code block.
 
 ### Layout conventions (no native support → use these)
 
