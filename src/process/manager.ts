@@ -21,6 +21,16 @@ export interface ProcessManagerConfig {
   agentsDir: string;
 }
 
+/** Identity info injected into the Claude system prompt at spawn time */
+export interface BotIdentity {
+  /** Bot display name (e.g. "atri") */
+  name: string;
+  /** Telegram bot username without the leading @ (e.g. "atri65535_bot") */
+  username: string;
+  /** Other bots in the same group chat that can be @mentioned */
+  peerBots?: Array<{ name: string; username: string }>;
+}
+
 export class ProcessManager {
   private processes = new Map<string, ClaudeProcess>();
   private config: ProcessManagerConfig;
@@ -31,7 +41,7 @@ export class ProcessManager {
     this.log = log.child({ module: "process-manager" });
   }
 
-  acquire(session: Session, botId: string, botExtraArgs?: string[]): ClaudeProcess {
+  acquire(session: Session, botId: string, botExtraArgs?: string[], identity?: BotIdentity): ClaudeProcess {
     const existing = this.processes.get(session.sessionId);
     if (existing && !existing.process.killed) {
       this.resetIdleTimer(session.sessionId);
@@ -53,8 +63,20 @@ export class ProcessManager {
     );
     mkdirSync(sessionDir, { recursive: true });
 
-    // Compose system prompt: SOUL.md + built-in skills
+    // Compose system prompt: identity + SOUL.md + built-in skills
     const parts: string[] = [];
+
+    // Bot identity (and peer-bot hints in group chats)
+    if (identity) {
+      const idLines: string[] = [`你是 ${identity.name}（@${identity.username}）。`];
+      if (session.isGroup && identity.peerBots && identity.peerBots.length > 0) {
+        const botList = identity.peerBots.map((b) => `@${b.username}（${b.name}）`).join("、");
+        idLines.push(
+          `本群可@的bot: ${botList}。只有以上列出的bot可以被@到，@其他任何bot都无效（消息不会送达）。除非用户明确要求bot间交流，否则不要主动@其他bot。`,
+        );
+      }
+      parts.push(idLines.join("\n"));
+    }
 
     // Load SOUL.md if it exists for this bot
     const soulPath = join(this.config.agentsDir, botId, "SOUL.md");
@@ -118,8 +140,8 @@ export class ProcessManager {
     return cp;
   }
 
-  async *sendMessage(session: Session, text: string, botId: string, botExtraArgs?: string[]): AsyncGenerator<StreamEvent> {
-    let cp = this.acquire(session, botId, botExtraArgs);
+  async *sendMessage(session: Session, text: string, botId: string, botExtraArgs?: string[], identity?: BotIdentity): AsyncGenerator<StreamEvent> {
+    let cp = this.acquire(session, botId, botExtraArgs, identity);
     cp.busy = true;
     cp.lastActiveAt = Date.now();
     this.clearIdleTimer(session.sessionId);
@@ -141,7 +163,7 @@ export class ProcessManager {
         session.claudeSessionId = undefined;
         this.processes.delete(session.sessionId);
 
-        cp = this.acquire(session, botId, botExtraArgs);
+        cp = this.acquire(session, botId, botExtraArgs, identity);
         cp.busy = true;
         this.clearIdleTimer(session.sessionId);
         sendUserMessage(cp.process, text);

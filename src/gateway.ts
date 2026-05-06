@@ -208,7 +208,7 @@ export class Gateway {
         // Check for @mentions of other bots
         for (const [username, targetBot] of botsByUsername) {
           if (targetBot.botId === sourceBot.botId) continue;
-          if (!text.includes(`@${username}`)) continue;
+          if (!text.toLowerCase().includes(`@${username}`)) continue;
 
           // Strip the @mention from text for the target bot
           const cleanText = text.replace(new RegExp(`@${username}`, "gi"), "").trim();

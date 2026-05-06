@@ -42,10 +42,18 @@ export interface MessageQueryOptions {
   search?: string;
 }
 
+const DEDUP_WINDOW = 500;
+
 export class MessageStore {
   private dir: string;
   /** Per-session cursors: sessionId → last seen message id */
   private cursors = new Map<string, string>();
+  /**
+   * Recent message ids per chat for deduplication. The gateway may run multiple
+   * bots in the same group, and Telegram fans each update out to every bot, so
+   * the same messageId can arrive at `append` more than once.
+   */
+  private recentIds = new Map<string, Set<string>>();
 
   /** Advance a session's cursor to a specific message id (e.g. after bot sends a reply) */
   advanceCursor(sessionId: string, messageId: string): void {
@@ -57,11 +65,26 @@ export class MessageStore {
     mkdirSync(this.dir, { recursive: true });
   }
 
-  /** Append a message to the chat's JSONL file */
+  /** Append a message to the chat's JSONL file (deduplicated by messageId) */
   append(chatId: string, msg: StoredMessage): void {
+    let ids = this.recentIds.get(chatId);
+    if (!ids) {
+      ids = new Set<string>();
+      for (const m of this.getRecent(chatId, DEDUP_WINDOW)) ids.add(m.id);
+      this.recentIds.set(chatId, ids);
+    }
+    if (ids.has(msg.id)) return;
+
     const filePath = this.chatFile(chatId);
-    const line = JSON.stringify(msg) + "\n";
-    appendFileSync(filePath, line, "utf-8");
+    appendFileSync(filePath, JSON.stringify(msg) + "\n", "utf-8");
+    ids.add(msg.id);
+
+    // Rebuild from file when the set grows large, so memory stays bounded.
+    if (ids.size > DEDUP_WINDOW * 2) {
+      const fresh = new Set<string>();
+      for (const m of this.getRecent(chatId, DEDUP_WINDOW)) fresh.add(m.id);
+      this.recentIds.set(chatId, fresh);
+    }
   }
 
   /** Query messages with filters */

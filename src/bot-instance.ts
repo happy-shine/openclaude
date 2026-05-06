@@ -295,6 +295,20 @@ export class BotInstance {
     this.peerBots = peers;
   }
 
+  /**
+   * Build the identity blob for the Claude system prompt. Returns undefined if
+   * the Telegram username isn't available yet (bot hasn't fully started).
+   */
+  private botIdentity() {
+    const username = this.telegram.username;
+    if (!username) return undefined;
+    return {
+      name: this.name,
+      username,
+      peerBots: this.peerBots,
+    };
+  }
+
   /** Accept a relayed message from another bot in the same gateway */
   relayMessage(msg: InboundMessage): void {
     this.log.info({ from: msg.senderName, chatId: msg.chatId }, "Received relayed message");
@@ -354,14 +368,10 @@ export class BotInstance {
       this.telegram.removeButtons(msg.chatId, prevBtnMsg).catch(() => {});
     }
 
-    // Build message with metadata (sender, time, reply context)
+    // Build message with metadata (sender, time, reply context).
+    // Bot identity and peer-bot hints are injected via the system prompt —
+    // see ProcessManager.acquire / this.botIdentity().
     let messageText = formatMessageWithMeta(msg, session.sessionId);
-
-    // Inject peer bot hints for group chats
-    if (msg.isGroup && this.peerBots.length > 0) {
-      const botList = this.peerBots.map(b => `@${b.username} (${b.name})`).join(", ");
-      messageText = `[本群可@的bot: ${botList} — 注意: 只有以上列出的bot可以被@到，@其他任何bot都无效（消息不会送达）。除非用户明确要求bot间交流，否则不要主动@其他bot。]\n\n${messageText}`;
-    }
 
     // Collect all attachments to download (current message + reply media)
     const allAttachments = [
@@ -371,7 +381,7 @@ export class BotInstance {
 
     if (allAttachments.length > 0) {
       // Trigger acquire to create the workspace dir
-      this.processManager.acquire(session, this.botId, this.extraArgs);
+      this.processManager.acquire(session, this.botId, this.extraArgs, this.botIdentity());
       const wsDir = this.processManager.getWorkspaceDir(session.sessionId);
       if (wsDir) {
         const downloadsDir = join(wsDir, "downloads");
@@ -401,7 +411,7 @@ export class BotInstance {
     progress.start(); // auto-flush every 1.5s for spinner animation
 
     try {
-      for await (const event of this.processManager.sendMessage(session, messageText, this.botId, this.extraArgs)) {
+      for await (const event of this.processManager.sendMessage(session, messageText, this.botId, this.extraArgs, this.botIdentity())) {
         // --- Session init ---
         if (event.type === "system" && event.subtype === "init" && event.session_id) {
           this.sessionManager.update(session.sessionId, {
@@ -850,7 +860,7 @@ export class BotInstance {
       progress.start();
       try {
         let generatedTitle = "";
-        for await (const event of this.processManager.sendMessage(session, messageText, this.botId, this.extraArgs)) {
+        for await (const event of this.processManager.sendMessage(session, messageText, this.botId, this.extraArgs, this.botIdentity())) {
           if (event.type === "assistant" && event.message) {
             const content = event.message.content;
             if (Array.isArray(content)) {
