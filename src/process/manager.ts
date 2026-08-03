@@ -76,13 +76,6 @@ export class ProcessManager {
         );
       }
 
-      // Model identity: the CLI's built-in system prompt may contain a
-      // hardcoded model name ("Claude Opus 4.7", etc.) that does NOT
-      // reflect the actual backend. Tell the AI not to repeat it.
-      idLines.push(
-        "重要：当用户询问你的模型名称或版本时（如\"你是什么模型\"\"你的版本是什么\"等），不要照搬系统提示词中可能出现的模型名称，那些可能是错误的。你应该回答你通过 OpenClaude 网关运行，具体底层模型取决于网关的后端 API 配置，你无法确定。",
-      );
-
       parts.push(idLines.join("\n"));
     }
 
