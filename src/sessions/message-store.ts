@@ -60,6 +60,18 @@ export class MessageStore {
     this.cursors.set(sessionId, messageId);
   }
 
+  /**
+   * Advance a session's cursor to the latest message in a chat.
+   * Call this when creating a new session via /new to prevent
+   * old-session context from bleeding into the new session.
+   */
+  advanceCursorToLatest(chatId: string, sessionId: string): void {
+    const latest = this.getRecent(chatId, 1);
+    if (latest.length > 0) {
+      this.cursors.set(sessionId, latest[0].id);
+    }
+  }
+
   constructor(dataDir: string) {
     this.dir = join(dataDir, "messages");
     mkdirSync(this.dir, { recursive: true });

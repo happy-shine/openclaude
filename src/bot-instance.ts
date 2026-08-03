@@ -306,6 +306,7 @@ export class BotInstance {
       name: this.name,
       username,
       peerBots: this.peerBots,
+      model: this.config.model ?? this.gatewayConfig.claude.model,
     };
   }
 
@@ -672,7 +673,12 @@ export class BotInstance {
     if (!access.allowed) return;
 
     this.sessionManager.resolve(msg.chatId, msg.channelType);
-    this.sessionManager.createNew(msg.chatId);
+    const session = this.sessionManager.createNew(msg.chatId);
+
+    // Advance cursor to latest so the new session doesn't inherit
+    // old-session group context (prevents cross-session context bleed).
+    this.messageStore.advanceCursorToLatest(msg.chatId, session.sessionId);
+
     const count = this.sessionManager.list(msg.chatId).length;
     await this.telegram.send({
       chatId: msg.chatId,

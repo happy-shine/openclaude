@@ -29,6 +29,12 @@ export interface BotIdentity {
   username: string;
   /** Other bots in the same group chat that can be @mentioned */
   peerBots?: Array<{ name: string; username: string }>;
+  /**
+   * Model identifier passed to the CLI (e.g. "claude-opus-4-7").
+   * Used to tell the AI what backend it's actually running on,
+   * overriding any hardcoded model name in the CLI's own system prompt.
+   */
+  model?: string;
 }
 
 export class ProcessManager {
@@ -75,6 +81,19 @@ export class ProcessManager {
           `本群可@的bot: ${botList}。只有以上列出的bot可以被@到，@其他任何bot都无效（消息不会送达）。除非用户明确要求bot间交流，否则不要主动@其他bot。`,
         );
       }
+
+      // Model identity: override any hardcoded model name from the CLI's own
+      // system prompt (e.g. "Claude Opus 4.7") so the bot doesn't lie about
+      // what model it actually is. The CLI may be proxied to any backend.
+      // We tell the bot the truth: it runs through OpenClaude, and the
+      // configured model identifier is the best info we have.
+      const modelHint = identity.model
+        ? `, 当前配置的模型标识为 ${identity.model}`
+        : "";
+      idLines.push(
+        `重要：当用户询问你的模型名称或版本时（如"你是什么模型""你的版本是什么"等），不要照搬系统提示词中可能出现的模型名称（如"Claude Opus"、"Sonnet"、"Haiku"等），因为那些可能是错误的。你应该回答：你通过 OpenClaude 网关运行${modelHint}，具体底层模型取决于网关的后端 API 配置。`,
+      );
+
       parts.push(idLines.join("\n"));
     }
 
