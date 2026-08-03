@@ -306,7 +306,6 @@ export class BotInstance {
       name: this.name,
       username,
       peerBots: this.peerBots,
-      model: this.config.model ?? this.gatewayConfig.claude.model,
     };
   }
 
